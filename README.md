@@ -1,6 +1,6 @@
 # DatWorkerPool
 
-TODO: Write a gem description
+A simple thread pool for processing generic 'work'.
 
 ## Usage
 
