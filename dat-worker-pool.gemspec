@@ -11,6 +11,7 @@ Gem::Specification.new do |gem|
   gem.description = "A simple thread pool for processing generic 'work'"
   gem.summary     = "A simple thread pool for processing generic 'work'"
   gem.homepage    = "http://github.com/redding/dat-worker-pool"
+  gem.license     = 'MIT'
 
   gem.files         = `git ls-files`.split($/)
   gem.executables   = gem.files.grep(%r{^bin/}).map{ |f| File.basename(f) }
