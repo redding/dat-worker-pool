@@ -71,9 +71,9 @@ class DatWorkerPool
   # finish.
   # **NOTE** Any work that is left on the queue isn't processed. The controlling
   # application for the worker pool should gracefully handle these items.
-  def shutdown(timeout)
+  def shutdown(timeout = nil)
     begin
-      SystemTimer.timeout(timeout, TimeoutError) do
+      proc = OptionalTimeoutProc.new(timeout, true) do
         @workers.each(&:shutdown)
         @queue.shutdown
 
@@ -84,6 +84,7 @@ class DatWorkerPool
         # `each`).
         @workers.first.join until @workers.empty?
       end
+      proc.call
     rescue TimeoutError => exception
       exception.message.replace "Timed out shutting down the worker pool"
       @debug ? raise(exception) : self.logger.error(exception.message)
@@ -137,6 +138,26 @@ class DatWorkerPool
       @mutex.synchronize{ @count -= 1 }
     end
 
+  end
+
+  class OptionalTimeoutProc
+    def initialize(timeout, reraise = false, &proc)
+      @timeout = timeout
+      @reraise = reraise
+      @proc    = proc
+    end
+
+    def call
+      if @timeout
+        begin
+          SystemTimer.timeout(@timeout, TimeoutError, &@proc)
+        rescue TimeoutError
+          raise if @reraise
+        end
+      else
+        @proc.call
+      end
+    end
   end
 
   module Logger
