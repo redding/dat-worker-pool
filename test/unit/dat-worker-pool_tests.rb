@@ -13,34 +13,49 @@ class DatWorkerPool
     should have_readers :logger, :spawned
     should have_imeths :add_work, :shutdown, :despawn_worker
     should have_imeths :work_items, :waiting
+    should have_imeths :worker_available?, :all_spawned_workers_are_busy?
+    should have_imeths :reached_max_workers?
+    should have_imeths :queue_empty?
 
   end
 
   class WorkerBehaviorTests < BaseTests
     desc "workers"
     setup do
-      @work_pool = DatWorkerPool.new(1, 2, true){|work| sleep(work) }
+      @work_pool = DatWorkerPool.new(1, 2, true){ |work| sleep(work) }
     end
 
     should "be created as needed and only go up to the maximum number allowed" do
       # the minimum should be spawned and waiting
       assert_equal 1, @work_pool.spawned
       assert_equal 1, @work_pool.waiting
+      assert_equal true,  @work_pool.worker_available?
+      assert_equal false, @work_pool.all_spawned_workers_are_busy?
+      assert_equal false, @work_pool.reached_max_workers?
 
       # the minimum should be spawned, but no longer waiting
       @work_pool.add_work 5
       assert_equal 1, @work_pool.spawned
       assert_equal 0, @work_pool.waiting
+      assert_equal true,  @work_pool.worker_available?
+      assert_equal true,  @work_pool.all_spawned_workers_are_busy?
+      assert_equal false, @work_pool.reached_max_workers?
 
       # an additional worker should be spawned
       @work_pool.add_work 5
       assert_equal 2, @work_pool.spawned
       assert_equal 0, @work_pool.waiting
+      assert_equal false, @work_pool.worker_available?
+      assert_equal true,  @work_pool.all_spawned_workers_are_busy?
+      assert_equal true,  @work_pool.reached_max_workers?
 
       # no additional workers are spawned, the work waits to be processed
       @work_pool.add_work 5
       assert_equal 2, @work_pool.spawned
       assert_equal 0, @work_pool.waiting
+      assert_equal false, @work_pool.worker_available?
+      assert_equal true,  @work_pool.all_spawned_workers_are_busy?
+      assert_equal true, @work_pool.reached_max_workers?
     end
 
     should "go back to waiting when they finish working" do
@@ -55,6 +70,19 @@ class DatWorkerPool
 
       assert_equal 1, @work_pool.spawned
       assert_equal 1, @work_pool.waiting
+    end
+
+  end
+
+  class AddWorkWithNoWorkersTests < BaseTests
+    setup do
+      @work_pool = DatWorkerPool.new(0, 0){ |work| }
+    end
+
+    should "return whether or not the queue is empty" do
+      assert_equal true, @work_pool.queue_empty?
+      @work_pool.add_work 'test'
+      assert_equal false, @work_pool.queue_empty?
     end
 
   end
