@@ -129,7 +129,6 @@ class DatWorkerPool
     should "allow any work that has been picked up to be processed" do
       # make sure the workers haven't processed any work
       assert_equal [], @finished
-
       subject.shutdown(5)
 
       # NOTE, the last work shouldn't have been processed, as it wasn't
@@ -149,6 +148,13 @@ class DatWorkerPool
       assert_raises(DatWorkerPool::TimeoutError) do
         subject.shutdown(0.1)
       end
+    end
+
+    should "allow jobs to finish by not providing a shutdown timeout" do
+      assert_equal [], @finished
+      subject.shutdown
+      assert_includes 'a', @finished
+      assert_includes 'b', @finished
     end
 
   end
