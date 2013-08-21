@@ -37,6 +37,22 @@ class DatWorkerPool
     @workers_waiting.count
   end
 
+  def worker_available?
+    !reached_max_workers? || @workers_waiting.count > 0
+  end
+
+  def all_spawned_workers_are_busy?
+    @workers_waiting.count <= 0
+  end
+
+  def reached_max_workers?
+    @mutex.synchronize{ @spawned >= @max_workers }
+  end
+
+  def queue_empty?
+    @queue.empty?
+  end
+
   # Check if all workers are busy before adding the work. When the work is
   # added, a worker will stop waiting (if it was idle). Because of that, we
   # can't reliably check if all workers are busy. We might think all workers are
@@ -44,9 +60,9 @@ class DatWorkerPool
   # would spawn a worker to do nothing.
   def add_work(work_item)
     return if work_item.nil?
-    new_worker_needed = all_workers_are_busy?
+    new_worker_needed = all_spawned_workers_are_busy?
     @queue.push work_item
-    self.spawn_worker if new_worker_needed && havent_reached_max_workers?
+    self.spawn_worker if new_worker_needed && !reached_max_workers?
   end
 
   # Shutdown each worker and then the queue. Shutting down the queue will
@@ -102,16 +118,6 @@ class DatWorkerPool
       self.logger.error "Exception raised while doing work!"
       self.logger.error "#{exception.class}: #{exception.message}"
       self.logger.error exception.backtrace.join("\n")
-    end
-  end
-
-  def all_workers_are_busy?
-    @workers_waiting.count <= 0
-  end
-
-  def havent_reached_max_workers?
-    @mutex.synchronize do
-      @spawned < @max_workers
     end
   end
 
