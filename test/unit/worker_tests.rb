@@ -20,8 +20,7 @@ class DatWorkerPool::Worker
 
     should "trigger exiting it's work loop with #shutdown and " \
            "join it's thread with #join" do
-      @queue.shutdown   # ensure the thread is not waiting on the queue
-      subject.join(0.1) # ensure the thread is looping for work
+      @queue.shutdown # ensure the thread is not waiting on the queue
       subject.shutdown
       assert_not_nil subject.join(1)
     end

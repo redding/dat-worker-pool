@@ -25,22 +25,13 @@ class DatWorkerPool
 
     def work_loop
       loop do
-        self.wait_for_work
-        break if @shutdown
-        @block.call @queue.pop
+        @workers_waiting.increment
+        work_item = @queue.pop
+        @workers_waiting.decrement
+        !@shutdown ? @block.call(work_item) : break
       end
     ensure
       @pool.despawn_worker(self)
-    end
-
-    # Wait for work to process by checking if the queue is empty.
-    def wait_for_work
-      while @queue.empty?
-        return if @shutdown
-        @workers_waiting.increment
-        @queue.wait_for_work_item
-        @workers_waiting.decrement
-      end
     end
 
   end
