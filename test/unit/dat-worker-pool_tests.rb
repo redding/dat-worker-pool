@@ -3,7 +3,7 @@ require 'dat-worker-pool'
 
 class DatWorkerPool
 
-  class BaseTests < Assert::Context
+  class UnitTests < Assert::Context
     desc "DatWorkerPool"
     setup do
       @work_pool = DatWorkerPool.new{ }
@@ -19,7 +19,7 @@ class DatWorkerPool
 
   end
 
-  class WorkerBehaviorTests < BaseTests
+  class WorkerBehaviorTests < UnitTests
     desc "workers"
     setup do
       @work_pool = DatWorkerPool.new(1, 2, true){ |work| sleep(work) }
@@ -74,7 +74,7 @@ class DatWorkerPool
 
   end
 
-  class AddWorkWithNoWorkersTests < BaseTests
+  class AddWorkWithNoWorkersTests < UnitTests
     setup do
       @work_pool = DatWorkerPool.new(0, 0){ |work| }
     end
@@ -87,7 +87,7 @@ class DatWorkerPool
 
   end
 
-  class AddWorkAndProcessItTests < BaseTests
+  class AddWorkAndProcessItTests < UnitTests
     desc "add_work and process"
     setup do
       @result = nil
@@ -112,7 +112,7 @@ class DatWorkerPool
 
   end
 
-  class ShutdownTests < BaseTests
+  class ShutdownTests < UnitTests
     desc "shutdown"
     setup do
       @mutex = Mutex.new
