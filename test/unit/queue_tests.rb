@@ -3,7 +3,7 @@ require 'dat-worker-pool/queue'
 
 class DatWorkerPool::Queue
 
-  class BaseTests < Assert::Context
+  class UnitTests < Assert::Context
     desc "DatWorkerPool::Queue"
     setup do
       @queue = DatWorkerPool::Queue.new
@@ -11,7 +11,7 @@ class DatWorkerPool::Queue
     subject{ @queue }
 
     should have_imeths :work_items, :push, :pop, :empty?
-    should have_imeths :wait_for_work_item, :shutdown
+    should have_imeths :shutdown
 
     should "allow pushing work items onto the queue with #push" do
       subject.push 'work'
@@ -34,6 +34,12 @@ class DatWorkerPool::Queue
       assert_equal 0, subject.work_items.size
     end
 
+    should "return nothing with pop when the queue has been shutdown" do
+      subject.push 'work1'
+      subject.shutdown
+      assert_nil subject.pop
+    end
+
     should "return whether the queue is empty or not with #empty?" do
       assert subject.empty?
       subject.push 'work'
@@ -42,25 +48,32 @@ class DatWorkerPool::Queue
       assert subject.empty?
     end
 
-    should "sleep a thread with #wait_for_work_item and " \
-           "wake it up with #push" do
-      thread = Thread.new{ subject.wait_for_work_item }
-      thread.join(0.1) # ensure the thread runs enough to start waiting
-      subject.push 'work'
-      # if this returns nil, then the thread never finished
-      assert_not_nil thread.join(1)
+  end
+
+  class SignallingTests < UnitTests
+    desc "mutex and condition variable behavior"
+    setup do
+      @thread = Thread.new do
+        Thread.current['work_item'] = @queue.pop || 'got nothing'
+      end
     end
 
-    should "sleep threads with #wait_for_work_item and " \
-           "wake them all up with #shutdown" do
-      thread1 = Thread.new{ subject.wait_for_work_item }
-      thread1.join(0.1) # ensure the thread runs enough to start waiting
-      thread2 = Thread.new{ subject.wait_for_work_item }
-      thread2.join(0.1) # ensure the thread runs enough to start waiting
+    should "have threads wait for a work item to be added when using pop" do
+      assert_equal "sleep", @thread.status
+    end
+
+    should "wakeup threads when work is pushed onto the queue" do
+      subject.push 'some work'
+      sleep 0.1
+      assert !@thread.alive?
+      assert_equal 'some work', @thread['work_item']
+    end
+
+    should "wakeup thread when the queue is shutdown" do
       subject.shutdown
-      # if these returns nil, then the threads never finished
-      assert_not_nil thread1.join(1)
-      assert_not_nil thread2.join(1)
+      sleep 0.1
+      assert !@thread.alive?
+      assert_equal 'got nothing', @thread['work_item']
     end
 
   end

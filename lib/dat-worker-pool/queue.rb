@@ -26,17 +26,15 @@ class DatWorkerPool
     end
 
     def pop
-      @mutex.synchronize{ @work_items.shift }
+      return if @shutdown
+      @mutex.synchronize do
+        @condition_variable.wait(@mutex) while !@shutdown && @work_items.empty?
+        @work_items.shift
+      end
     end
 
     def empty?
       @mutex.synchronize{ @work_items.empty? }
-    end
-
-    # wait to be signaled by `push`
-    def wait_for_work_item
-      return if @shutdown
-      @mutex.synchronize{ @condition_variable.wait(@mutex) }
     end
 
     # wake up any workers who are idle (because of `wait_for_work_item`)
