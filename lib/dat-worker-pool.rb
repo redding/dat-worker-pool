@@ -91,7 +91,24 @@ class DatWorkerPool
     end
   end
 
-  # public, because workers need to call it for themselves
+  protected
+
+  def spawn_worker
+    @mutex.synchronize do
+      Worker.new(@queue).tap do |w|
+        w.on_work       = proc{ |work_item| do_work(work_item) }
+        w.on_waiting    = proc{ @workers_waiting.increment }
+        w.on_continuing = proc{ @workers_waiting.decrement }
+        w.on_shutdown   = proc{ |worker| despawn_worker(worker) }
+
+        @workers << w
+        @spawned += 1
+
+        w.start
+      end
+    end
+  end
+
   def despawn_worker(worker)
     @mutex.synchronize do
       @spawned -= 1
@@ -99,27 +116,12 @@ class DatWorkerPool
     end
   end
 
-  protected
-
-  def spawn_worker
-    @mutex.synchronize do
-      worker = Worker.new(self, @queue, @workers_waiting) do |work_item|
-        do_work(work_item)
-      end
-      @workers << worker
-      @spawned += 1
-      worker
-    end
-  end
-
   def do_work(work_item)
-    begin
-      @do_work_proc.call(work_item)
-    rescue Exception => exception
-      self.logger.error "Exception raised while doing work!"
-      self.logger.error "#{exception.class}: #{exception.message}"
-      self.logger.error exception.backtrace.join("\n")
-    end
+    @do_work_proc.call(work_item)
+  rescue Exception => exception
+    self.logger.error "Exception raised while doing work!"
+    self.logger.error "#{exception.class}: #{exception.message}"
+    self.logger.error exception.backtrace.join("\n")
   end
 
   class WorkersWaiting
