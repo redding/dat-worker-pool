@@ -26,7 +26,6 @@ class DatWorkerPool
 
     def shutdown
       @shutdown = true
-      @queue.shutdown
     end
 
     def join(*args)
@@ -40,7 +39,8 @@ class DatWorkerPool
         @on_waiting.call(self)
         work_item = @queue.pop
         @on_continuing.call(self)
-        !@shutdown ? @on_work.call(work_item) : break
+        break if @shutdown
+        @on_work.call(work_item) if work_item
       end
     ensure
       @on_shutdown.call(self)
