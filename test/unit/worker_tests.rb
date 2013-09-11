@@ -17,6 +17,7 @@ class DatWorkerPool::Worker
     end
     teardown do
       @worker.shutdown
+      @queue.shutdown
       @worker.join
     end
     subject{ @worker }
@@ -41,11 +42,14 @@ class DatWorkerPool::Worker
       assert_equal [ 'one', 'two' ], @work_done
     end
 
-    should "stop it's queue and itself, ending it's thread with #shutdown" do
+    should "flag itself for exiting it's work loop with #shutdown and " \
+           "end it's thread once it's queue is shutdown" do
       thread = subject.start
       subject.join 0.1 # trigger the worker's thread to run, allow it to get into it's
                        # work loop
       assert_nothing_raised{ subject.shutdown }
+      @queue.shutdown
+
       subject.join 0.1 # trigger the worker's thread to run, should exit
       assert_not thread.alive?
       assert_not subject.running?
@@ -91,7 +95,7 @@ class DatWorkerPool::Worker
     end
 
     should "call the on shutdown callback, yielding itself, when " \
-           "it's shutdown and exits it's work loop" do
+           "it's shutdown" do
       shutdown, yielded_worker = nil, nil
       subject.on_shutdown = proc do |worker|
         shutdown = true
@@ -99,6 +103,7 @@ class DatWorkerPool::Worker
       end
       subject.start
       subject.shutdown
+      @queue.shutdown
       subject.join 0.1 # trigger the worker's thread to run
 
       assert_equal true, shutdown
