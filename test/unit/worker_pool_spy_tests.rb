@@ -62,6 +62,12 @@ class DatWorkerPool::WorkerPoolSpy
       assert_equal 10, subject.shutdown_timeout
     end
 
+    should "allow calling shutdown with no timeout" do
+      subject.shutdown
+      assert_true subject.shutdown_called
+      assert_nil subject.shutdown_timeout
+    end
+
   end
 
 end

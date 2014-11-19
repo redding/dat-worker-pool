@@ -24,7 +24,7 @@ class DatWorkerPool
       @work_items << work if work
     end
 
-    def shutdown(timeout)
+    def shutdown(timeout = nil)
       @shutdown_called = true
       @shutdown_timeout = timeout
     end
