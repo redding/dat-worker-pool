@@ -11,7 +11,7 @@ class DatWorkerPool::Queue
     subject{ @queue }
 
     should have_imeths :work_items, :push, :pop, :empty?
-    should have_imeths :shutdown
+    should have_imeths :start, :shutdown, :shutdown?
 
     should "allow pushing work items onto the queue with #push" do
       subject.push 'work'
@@ -46,6 +46,14 @@ class DatWorkerPool::Queue
       assert_not subject.empty?
       subject.pop
       assert subject.empty?
+    end
+
+    should "reset its shutdown flag when started" do
+      assert_false subject.shutdown?
+      subject.shutdown
+      assert_true subject.shutdown?
+      subject.start
+      assert_false subject.shutdown?
     end
 
   end

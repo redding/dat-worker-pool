@@ -10,12 +10,18 @@ class DatWorkerPool
     end
     subject{ @work_pool }
 
-    should have_readers :logger, :spawned
-    should have_imeths :add_work, :shutdown, :despawn_worker
+    should have_readers :logger, :spawned, :queue
+    should have_imeths :add_work, :start, :shutdown, :despawn_worker
     should have_imeths :work_items, :waiting
     should have_imeths :worker_available?, :all_spawned_workers_are_busy?
     should have_imeths :reached_max_workers?
     should have_imeths :queue_empty?
+
+    should "know its attributes" do
+      assert_instance_of ::Logger, subject.logger
+      assert_equal 0, subject.spawned
+      assert_instance_of Queue, subject.queue
+    end
 
   end
 
@@ -23,6 +29,7 @@ class DatWorkerPool
     desc "workers"
     setup do
       @work_pool = DatWorkerPool.new(1, 2, true){ |work| sleep(work) }
+      @work_pool.start
     end
 
     should "be created as needed and only go up to the maximum number allowed" do
@@ -92,6 +99,7 @@ class DatWorkerPool
     setup do
       @result = nil
       @work_pool = DatWorkerPool.new(1){|work| @result = (2 / work) }
+      @work_pool.start
     end
 
     should "have added the work and processed it by calling the passed block" do
@@ -112,6 +120,33 @@ class DatWorkerPool
 
   end
 
+  class StartTests < UnitTests
+    desc "start"
+    setup do
+      @work_pool = DatWorkerPool.new(1, 2){ |work| sleep(work) }
+    end
+    subject{ @work_pool }
+
+    should "start its queue" do
+      assert_false subject.queue.shutdown?
+      subject.start
+      assert_false subject.queue.shutdown?
+      subject.shutdown
+      assert_true subject.queue.shutdown?
+      subject.start
+      assert_false subject.queue.shutdown?
+    end
+
+    should "keep workers from being spawned until its called" do
+      assert_equal 0, subject.spawned
+      subject.add_work 1
+      assert_equal 0, subject.spawned
+      subject.start
+      assert_equal 1, subject.spawned
+    end
+
+  end
+
   class ShutdownTests < UnitTests
     desc "shutdown"
     setup do
@@ -121,6 +156,7 @@ class DatWorkerPool
         sleep 1
         @mutex.synchronize{ @finished << work }
       end
+      @work_pool.start
       @work_pool.add_work 'a'
       @work_pool.add_work 'b'
       @work_pool.add_work 'c'

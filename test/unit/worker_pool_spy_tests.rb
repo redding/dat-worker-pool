@@ -11,10 +11,10 @@ class DatWorkerPool::WorkerPoolSpy
     subject{ @worker_pool_spy }
 
     should have_readers :work_items
-    should have_readers :shutdown_called, :shutdown_timeout
+    should have_readers :start_called, :shutdown_called, :shutdown_timeout
     should have_accessors :worker_available
     should have_imeths :worker_available?, :queue_empty?
-    should have_imeths :add_work, :shutdown
+    should have_imeths :add_work, :start, :shutdown
 
     should "have nothing in it's work items by default" do
       assert subject.work_items.empty?
@@ -23,6 +23,10 @@ class DatWorkerPool::WorkerPoolSpy
     should "not have a worker available by default" do
       assert_equal false, subject.worker_available
       assert_not subject.worker_available?
+    end
+
+    should "return false for start called by default" do
+      assert_equal false, subject.start_called
     end
 
     should "return false for shutdown called by default" do
@@ -56,9 +60,14 @@ class DatWorkerPool::WorkerPoolSpy
       assert_equal false, subject.queue_empty?
     end
 
+    should "know when it's been started" do
+      subject.start
+      assert_true subject.start_called
+    end
+
     should "know when it's been shutdown and with what timeout" do
       subject.shutdown(10)
-      assert subject.shutdown_called
+      assert_true subject.shutdown_called
       assert_equal 10, subject.shutdown_timeout
     end
 

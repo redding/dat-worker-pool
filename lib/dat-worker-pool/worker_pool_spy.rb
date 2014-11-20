@@ -2,12 +2,14 @@ class DatWorkerPool
 
   class WorkerPoolSpy
     attr_reader :work_items
+    attr_reader :start_called
     attr_reader :shutdown_called, :shutdown_timeout
     attr_accessor :worker_available
 
     def initialize
       @worker_available = false
       @work_items = []
+      @start_called = false
       @shutdown_called  = false
       @shutdown_timeout = nil
     end
@@ -22,6 +24,10 @@ class DatWorkerPool
 
     def add_work(work)
       @work_items << work if work
+    end
+
+    def start
+      @start_called = true
     end
 
     def shutdown(timeout = nil)
