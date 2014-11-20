@@ -37,10 +37,18 @@ class DatWorkerPool
       @mutex.synchronize{ @work_items.empty? }
     end
 
+    def start
+      @shutdown = false
+    end
+
     # wake up any workers who are idle (because of `wait_for_work_item`)
     def shutdown
       @shutdown = true
       @mutex.synchronize{ @condition_variable.broadcast }
+    end
+
+    def shutdown?
+      @shutdown
     end
 
   end

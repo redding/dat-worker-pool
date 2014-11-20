@@ -11,6 +11,7 @@ class DatWorkerPool
   TimeoutError = Class.new(RuntimeError)
 
   attr_reader :logger, :spawned
+  attr_reader :queue
 
   def initialize(min = 0, max = 1, debug = false, &do_work_proc)
     @min_workers  = min
@@ -26,7 +27,7 @@ class DatWorkerPool
     @workers = []
     @spawned = 0
 
-    @min_workers.times{ self.spawn_worker }
+    @started = false
   end
 
   def work_items
@@ -62,7 +63,13 @@ class DatWorkerPool
     return if work_item.nil?
     new_worker_needed = all_spawned_workers_are_busy?
     @queue.push work_item
-    self.spawn_worker if new_worker_needed && !reached_max_workers?
+    self.spawn_worker if @started && new_worker_needed && !reached_max_workers?
+  end
+
+  def start
+    @started = true
+    @queue.start
+    @min_workers.times{ self.spawn_worker }
   end
 
   # Shutdown each worker and then the queue. Shutting down the queue will
@@ -72,6 +79,7 @@ class DatWorkerPool
   # **NOTE** Any work that is left on the queue isn't processed. The controlling
   # application for the worker pool should gracefully handle these items.
   def shutdown(timeout = nil)
+    @started = false
     begin
       proc = OptionalTimeoutProc.new(timeout, true) do
         @workers.each(&:shutdown)

@@ -10,6 +10,7 @@ class UseWorkerPoolTests < Assert::Context
     @work_pool = DatWorkerPool.new(1, 2, !!ENV['DEBUG']) do |work|
       @mutex.synchronize{ @results << (work * 100) }
     end
+    @work_pool.start
   end
 
   should "be able to add work, have it processed and stop the pool" do
