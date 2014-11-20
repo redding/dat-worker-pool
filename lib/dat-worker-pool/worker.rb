@@ -3,14 +3,21 @@ require 'thread'
 class DatWorkerPool
 
   class Worker
-    attr_writer :on_work, :on_waiting, :on_continuing, :on_shutdown
+
+    attr_accessor :on_work
+    attr_accessor :on_start_callbacks, :on_shutdown_callbacks
+    attr_accessor :on_sleep_callbacks, :on_wakeup_callbacks
+    attr_accessor :before_work_callbacks, :after_work_callbacks
 
     def initialize(queue)
       @queue = queue
-      @on_work       = proc{ |work_item| }
-      @on_waiting    = proc{ |worker| }
-      @on_continuing = proc{ |worker| }
-      @on_shutdown   = proc{ |worker| }
+      @on_work = proc{ |worker, work_item| }
+      @on_start_callbacks    = []
+      @on_shutdown_callbacks = []
+      @on_sleep_callbacks    = []
+      @on_wakeup_callbacks   = []
+      @before_work_callbacks = []
+      @after_work_callbacks  = []
 
       @shutdown = false
       @thread   = nil
@@ -35,16 +42,23 @@ class DatWorkerPool
     protected
 
     def work_loop
+      @on_start_callbacks.each{ |p| p.call(self) }
       loop do
-        @on_waiting.call(self)
+        @on_sleep_callbacks.each{ |p| p.call(self) }
         work_item = @queue.pop
-        @on_continuing.call(self)
+        @on_wakeup_callbacks.each{ |p| p.call(self) }
         break if @shutdown
-        @on_work.call(work_item) if work_item
+        do_work(work_item) if work_item
       end
     ensure
-      @on_shutdown.call(self)
+      @on_shutdown_callbacks.each{ |p| p.call(self) }
       @thread = nil
+    end
+
+    def do_work(work_item)
+      @before_work_callbacks.each{ |p| p.call(self, work_item) }
+      @on_work.call(self, work_item)
+      @after_work_callbacks.each{ |p| p.call(self, work_item) }
     end
 
   end
