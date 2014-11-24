@@ -11,16 +11,45 @@ class DatWorkerPool
     subject{ @work_pool }
 
     should have_readers :logger, :spawned, :queue
+    should have_readers :on_worker_start_callbacks, :on_worker_shutdown_callbacks
+    should have_readers :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
+    should have_readers :before_work_callbacks, :after_work_callbacks
     should have_imeths :add_work, :start, :shutdown, :despawn_worker
     should have_imeths :work_items, :waiting
     should have_imeths :worker_available?, :all_spawned_workers_are_busy?
     should have_imeths :reached_max_workers?
     should have_imeths :queue_empty?
+    should have_imeths :on_queue_pop_callbacks, :on_queue_push_callbacks
+    should have_imeths :on_queue_pop, :on_queue_push
+    should have_imeths :on_worker_start, :on_worker_shutdown
+    should have_imeths :on_worker_sleep, :on_worker_wakeup
+    should have_imeths :before_work, :after_work
 
     should "know its attributes" do
       assert_instance_of ::Logger, subject.logger
       assert_equal 0, subject.spawned
       assert_instance_of Queue, subject.queue
+    end
+
+    should "default its worker callbacks" do
+      assert_equal [], subject.on_worker_start_callbacks
+      assert_equal 1, subject.on_worker_shutdown_callbacks.size
+      assert_instance_of Proc, subject.on_worker_shutdown_callbacks.first
+      assert_equal 1, subject.on_worker_sleep_callbacks.size
+      assert_instance_of Proc, subject.on_worker_sleep_callbacks.first
+      assert_equal 1, subject.on_worker_wakeup_callbacks.size
+      assert_instance_of Proc, subject.on_worker_wakeup_callbacks.first
+      assert_equal [], subject.before_work_callbacks
+      assert_equal [], subject.after_work_callbacks
+    end
+
+    should "demeter its queue's callbacks" do
+      callback = proc{ }
+      subject.on_queue_pop(&callback)
+      assert_equal [callback], subject.on_queue_pop_callbacks
+      callback = proc{ }
+      subject.on_queue_push(&callback)
+      assert_equal [callback], subject.on_queue_push_callbacks
     end
 
   end
@@ -77,6 +106,51 @@ class DatWorkerPool
 
       assert_equal 1, @work_pool.spawned
       assert_equal 1, @work_pool.waiting
+    end
+
+  end
+
+  class WorkerCallbackTests < UnitTests
+    desc "worker callbacks"
+    setup do
+      @start_called = false
+      @shutdown_called = false
+      @sleep_called = false
+      @wakeup_called = false
+      @before_work_called = false
+      @after_work_called = false
+
+      @work_pool = DatWorkerPool.new(1){ |work| }.tap do |p|
+        p.on_worker_start{ @start_called = true }
+        p.on_worker_shutdown{ @shutdown_called = true }
+        p.on_worker_sleep{ @sleep_called = true }
+        p.on_worker_wakeup{ @wakeup_called = true }
+        p.before_work{ @before_work_called = true }
+        p.after_work{ @after_work_called = true }
+      end
+    end
+    subject{ @work_pool }
+
+    should "call the worker callbacks as workers wait or wakeup" do
+      assert_false @start_called
+      assert_false @sleep_called
+      subject.start
+      assert_true @start_called
+      assert_true @sleep_called
+      assert_false @wakeup_called
+      assert_false @before_work_called
+      assert_false @after_work_called
+      @sleep_called = false
+      subject.add_work 'work'
+      assert_true @wakeup_called
+      assert_true @before_work_called
+      assert_true @after_work_called
+      assert_true @sleep_called
+      @wakeup_called = false
+      assert_false @shutdown_called
+      subject.shutdown
+      assert_true @wakeup_called
+      assert_true @shutdown_called
     end
 
   end

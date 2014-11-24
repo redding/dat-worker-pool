@@ -10,12 +10,25 @@ class DatWorkerPool::Queue
     end
     subject{ @queue }
 
+    should have_accessors :on_push_callbacks, :on_pop_callbacks
     should have_imeths :work_items, :push, :pop, :empty?
     should have_imeths :start, :shutdown, :shutdown?
+
+    should "default its callbacks" do
+      assert_equal [], subject.on_push_callbacks
+      assert_equal [], subject.on_pop_callbacks
+    end
 
     should "allow pushing work items onto the queue with #push" do
       subject.push 'work'
       assert_equal [ 'work' ], subject.work_items
+    end
+
+    should "call its on push callback when work is pushed" do
+      on_push_called = false
+      subject.on_push_callbacks << proc{ on_push_called = true }
+      subject.push 'work'
+      assert_true on_push_called
     end
 
     should "raise an exception if trying to push work when shutdown" do
@@ -32,6 +45,14 @@ class DatWorkerPool::Queue
       assert_equal 1, subject.work_items.size
       assert_equal 'work2', subject.pop
       assert_equal 0, subject.work_items.size
+    end
+
+    should "call its on pop callback when work is popped" do
+      subject.push 'work'
+      on_pop_called = false
+      subject.on_pop_callbacks << proc{ on_pop_called = true }
+      subject.pop
+      assert_true on_pop_called
     end
 
     should "return nothing with pop when the queue has been shutdown" do

@@ -12,6 +12,9 @@ class DatWorkerPool
 
   attr_reader :logger, :spawned
   attr_reader :queue
+  attr_reader :on_worker_start_callbacks, :on_worker_shutdown_callbacks
+  attr_reader :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
+  attr_reader :before_work_callbacks, :after_work_callbacks
 
   def initialize(min = 0, max = 1, debug = false, &do_work_proc)
     @min_workers  = min
@@ -26,6 +29,13 @@ class DatWorkerPool
     @mutex   = Mutex.new
     @workers = []
     @spawned = 0
+
+    @on_worker_start_callbacks    = []
+    @on_worker_shutdown_callbacks = [proc{ |worker| despawn_worker(worker) }]
+    @on_worker_sleep_callbacks    = [proc{ @workers_waiting.increment }]
+    @on_worker_wakeup_callbacks   = [proc{ @workers_waiting.decrement }]
+    @before_work_callbacks = []
+    @after_work_callbacks  = []
 
     @started = false
   end
@@ -82,6 +92,10 @@ class DatWorkerPool
     @started = false
     begin
       proc = OptionalTimeoutProc.new(timeout, true) do
+        # Workers need to be shutdown before the queue. This marks a flag that
+        # tells the workers to exit out of their loop once they wakeup. The
+        # queue shutdown signals the workers to wakeup, so the flag needs to be
+        # set before they wakeup.
         @workers.each(&:shutdown)
         @queue.shutdown
 
@@ -99,15 +113,32 @@ class DatWorkerPool
     end
   end
 
+  def on_queue_pop_callbacks;  @queue.on_pop_callbacks;  end
+  def on_queue_push_callbacks; @queue.on_push_callbacks; end
+
+  def on_queue_pop(&block);  @queue.on_pop_callbacks << block;  end
+  def on_queue_push(&block); @queue.on_push_callbacks << block; end
+
+  def on_worker_start(&block);    @on_worker_start_callbacks << block;    end
+  def on_worker_shutdown(&block); @on_worker_shutdown_callbacks << block; end
+  def on_worker_sleep(&block);    @on_worker_sleep_callbacks << block;    end
+  def on_worker_wakeup(&block);   @on_worker_wakeup_callbacks << block;   end
+
+  def before_work(&block); @before_work_callbacks << block; end
+  def after_work(&block);  @after_work_callbacks << block;  end
+
   protected
 
   def spawn_worker
     @mutex.synchronize do
       Worker.new(@queue).tap do |w|
-        w.on_work       = proc{ |work_item| do_work(work_item) }
-        w.on_waiting    = proc{ @workers_waiting.increment }
-        w.on_continuing = proc{ @workers_waiting.decrement }
-        w.on_shutdown   = proc{ |worker| despawn_worker(worker) }
+        w.on_work = proc{ |worker, work_item| do_work(work_item) }
+        w.on_start_callbacks    = @on_worker_start_callbacks
+        w.on_shutdown_callbacks = @on_worker_shutdown_callbacks
+        w.on_sleep_callbacks    = @on_worker_sleep_callbacks
+        w.on_wakeup_callbacks   = @on_worker_wakeup_callbacks
+        w.before_work_callbacks = @before_work_callbacks
+        w.after_work_callbacks  = @after_work_callbacks
 
         @workers << w
         @spawned += 1
@@ -147,7 +178,6 @@ class DatWorkerPool
     def decrement
       @mutex.synchronize{ @count -= 1 }
     end
-
   end
 
   class OptionalTimeoutProc
