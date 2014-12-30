@@ -1,6 +1,7 @@
 class DatWorkerPool
 
   class WorkerPoolSpy
+    attr_reader :min_workers, :max_workers, :debug
     attr_reader :work_proc, :work_items
     attr_reader :start_called
     attr_reader :shutdown_called, :shutdown_timeout
@@ -10,8 +11,11 @@ class DatWorkerPool
     attr_reader :before_work_callbacks, :after_work_callbacks
     attr_accessor :worker_available
 
-    def initialize(&block)
-      @work_proc = block
+    def initialize(min = 0, max = 1, debug = false, &block)
+      @min_workers  = min
+      @max_workers  = max
+      @debug        = debug
+      @work_proc    = block
 
       @worker_available = false
       @work_items = []
@@ -38,7 +42,15 @@ class DatWorkerPool
     end
 
     def add_work(work)
-      @work_items << work if work
+      return unless work
+      @work_items << work
+      @on_queue_push_callbacks.each(&:call)
+    end
+
+    def pop_work
+      work = @work_items.shift
+      @on_queue_pop_callbacks.each(&:call)
+      work
     end
 
     def start
