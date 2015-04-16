@@ -226,9 +226,15 @@ class DatWorkerPool
     setup do
       @mutex = Mutex.new
       @finished = []
-      @work_pool = DatWorkerPool.new(1, 2, true) do |work|
-        sleep 1
-        @mutex.synchronize{ @finished << work }
+      @max_workers = 2
+      @work_pool = DatWorkerPool.new(1, @max_workers, true) do |work|
+        begin
+          sleep 1
+          @mutex.synchronize{ @finished << work }
+        rescue ShutdownError => error
+          @mutex.synchronize{ @finished << error }
+          raise error # re-raise it otherwise worker won't shutdown
+        end
       end
       @work_pool.start
       @work_pool.add_work 'a'
@@ -255,8 +261,12 @@ class DatWorkerPool
     should "timeout if the workers take to long to finish" do
       # make sure the workers haven't processed any work
       assert_equal [], @finished
-      assert_raises(DatWorkerPool::TimeoutError) do
+      assert_raises(DatWorkerPool::ShutdownError) do
         subject.shutdown(0.1)
+      end
+      assert_equal @max_workers, @finished.size
+      @finished.each do |error|
+        assert_instance_of DatWorkerPool::ShutdownError, error
       end
     end
 

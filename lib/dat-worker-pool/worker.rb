@@ -28,7 +28,7 @@ class DatWorkerPool
     end
 
     def running?
-      @thread && @thread.alive?
+      !!(@thread && @thread.alive?)
     end
 
     def shutdown
@@ -39,7 +39,12 @@ class DatWorkerPool
       @thread.join(*args) if running?
     end
 
-    protected
+    def raise(*args)
+      @thread.raise(*args) if running?
+      self.join
+    end
+
+    private
 
     def work_loop
       @on_start_callbacks.each{ |p| p.call(self) }
