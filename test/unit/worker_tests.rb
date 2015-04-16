@@ -22,7 +22,7 @@ class DatWorkerPool::Worker
     end
     subject{ @worker }
 
-    should have_accessors :on_work
+    should have_accessors :on_work, :on_error_callbacks
     should have_accessors :on_start_callbacks, :on_shutdown_callbacks
     should have_accessors :on_sleep_callbacks, :on_wakeup_callbacks
     should have_accessors :before_work_callbacks, :after_work_callbacks
@@ -30,6 +30,7 @@ class DatWorkerPool::Worker
 
     should "default its callbacks" do
       worker = DatWorkerPool::Worker.new(@queue)
+      assert_equal [], worker.on_error_callbacks
       assert_equal [], worker.on_start_callbacks
       assert_equal [], worker.on_shutdown_callbacks
       assert_equal [], worker.on_sleep_callbacks
@@ -83,7 +84,6 @@ class DatWorkerPool::Worker
 
       exception = RuntimeError.new
       subject.raise exception
-      assert_false subject.running?
       assert_equal [exception], @work_done
     end
 
@@ -93,47 +93,51 @@ class DatWorkerPool::Worker
     desc "callbacks"
     setup do
       @call_counter = 0
-      @on_start_called_with = nil
-      @on_start_call_count = nil
+      @on_error_called_with    = nil
+      @on_start_called_with    = nil
+      @on_start_called_at      = nil
       @on_shutdown_called_with = nil
-      @on_shutdown_call_count = nil
-      @on_sleep_called_with = nil
-      @on_sleep_call_count = nil
-      @on_wakeup_called_with = nil
-      @on_wakeup_call_count = nil
+      @on_shutdown_called_at   = nil
+      @on_sleep_called_with    = nil
+      @on_sleep_called_at      = nil
+      @on_wakeup_called_with   = nil
+      @on_wakeup_called_at     = nil
       @before_work_called_with = nil
-      @before_work_called_at = nil
-      @after_work_called_with = nil
-      @after_work_called_at = nil
+      @before_work_called_at   = nil
+      @after_work_called_with  = nil
+      @after_work_called_at    = nil
       @worker = DatWorkerPool::Worker.new(@queue).tap do |w|
-        w.on_start_callbacks    << proc do |*args|
+        w.on_error_callbacks << proc do |*args|
+          @on_error_called_with = args
+        end
+        w.on_start_callbacks << proc do |*args|
           @on_start_called_with = args
-          @on_start_called_at = (@call_counter += 1)
+          @on_start_called_at   = (@call_counter += 1)
         end
         w.on_shutdown_callbacks << proc do |*args|
           @on_shutdown_called_with = args
-          @on_shutdown_called_at = (@call_counter += 1)
+          @on_shutdown_called_at   = (@call_counter += 1)
         end
-        w.on_sleep_callbacks    << proc do |*args|
+        w.on_sleep_callbacks << proc do |*args|
           @on_sleep_called_with = args
-          @on_sleep_called_at = (@call_counter += 1)
+          @on_sleep_called_at   = (@call_counter += 1)
         end
-        w.on_wakeup_callbacks   << proc do |*args|
+        w.on_wakeup_callbacks << proc do |*args|
           @on_wakeup_called_with = args
-          @on_wakeup_called_at = (@call_counter += 1)
+          @on_wakeup_called_at   = (@call_counter += 1)
         end
         w.before_work_callbacks << proc do |*args|
           @before_work_called_with = args
-          @before_work_called_at = (@call_counter += 1)
+          @before_work_called_at   = (@call_counter += 1)
         end
         w.after_work_callbacks << proc do |*args|
           @after_work_called_with = args
-          @after_work_called_at = (@call_counter += 1)
+          @after_work_called_at   = (@call_counter += 1)
         end
       end
     end
 
-    should "pass its self to its start, shutdown, sleep and wakupe callbacks" do
+    should "pass its self to its start, shutdown, sleep and wakeup callbacks" do
       subject.start
       @queue.push('work')
       subject.shutdown
@@ -145,7 +149,7 @@ class DatWorkerPool::Worker
       assert_equal [subject], @on_wakeup_called_with
     end
 
-    should "pass its self and work to its beofre and after work callbacks" do
+    should "pass its self and work to its before and after work callbacks" do
       subject.start
       @queue.push('work')
       subject.shutdown
@@ -168,6 +172,24 @@ class DatWorkerPool::Worker
       @queue.shutdown
       assert_equal 7, @on_wakeup_called_at
       assert_equal 8, @on_shutdown_called_at
+    end
+
+    should "call its error callbacks when an exception occurs" do
+      exception = RuntimeError.new
+      subject.on_work = proc{ raise exception }
+      thread = subject.start
+      @queue.push('work')
+      assert_equal [subject, exception, 'work'], @on_error_called_with
+      assert_true thread.alive?
+    end
+
+    should "call its error callbacks when an shutdown error occurs and reraise" do
+      exception = DatWorkerPool::ShutdownError.new
+      subject.on_work = proc{ raise exception }
+      thread = subject.start
+      @queue.push('work')
+      assert_equal [subject, exception, 'work'], @on_error_called_with
+      assert_false thread.alive?
     end
 
   end

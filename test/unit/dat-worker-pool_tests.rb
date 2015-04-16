@@ -11,6 +11,7 @@ class DatWorkerPool
     subject{ @work_pool }
 
     should have_readers :logger, :spawned, :queue
+    should have_readers :on_worker_error_callbacks
     should have_readers :on_worker_start_callbacks, :on_worker_shutdown_callbacks
     should have_readers :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
     should have_readers :before_work_callbacks, :after_work_callbacks
@@ -21,6 +22,7 @@ class DatWorkerPool
     should have_imeths :queue_empty?
     should have_imeths :on_queue_pop_callbacks, :on_queue_push_callbacks
     should have_imeths :on_queue_pop, :on_queue_push
+    should have_imeths :on_worker_error
     should have_imeths :on_worker_start, :on_worker_shutdown
     should have_imeths :on_worker_sleep, :on_worker_wakeup
     should have_imeths :before_work, :after_work
@@ -32,6 +34,7 @@ class DatWorkerPool
     end
 
     should "default its worker callbacks" do
+      assert_equal [], subject.on_worker_error_callbacks
       assert_equal [], subject.on_worker_start_callbacks
       assert_equal 1, subject.on_worker_shutdown_callbacks.size
       assert_instance_of Proc, subject.on_worker_shutdown_callbacks.first
@@ -113,21 +116,24 @@ class DatWorkerPool
   class WorkerCallbackTests < UnitTests
     desc "worker callbacks"
     setup do
-      @start_called = false
-      @shutdown_called = false
-      @sleep_called = false
-      @wakeup_called = false
+      @error_called       = false
+      @start_called       = false
+      @shutdown_called    = false
+      @sleep_called       = false
+      @wakeup_called      = false
       @before_work_called = false
-      @after_work_called = false
+      @after_work_called  = false
 
-      @work_pool = DatWorkerPool.new(1){ |work| }.tap do |p|
-        p.on_worker_start{ @start_called = true }
-        p.on_worker_shutdown{ @shutdown_called = true }
-        p.on_worker_sleep{ @sleep_called = true }
-        p.on_worker_wakeup{ @wakeup_called = true }
-        p.before_work{ @before_work_called = true }
-        p.after_work{ @after_work_called = true }
+      @work_pool = DatWorkerPool.new(1) do |work|
+        raise work if work == 'error'
       end
+      @work_pool.on_worker_error{ @error_called = true }
+      @work_pool.on_worker_start{ @start_called = true }
+      @work_pool.on_worker_shutdown{ @shutdown_called = true }
+      @work_pool.on_worker_sleep{ @sleep_called = true }
+      @work_pool.on_worker_wakeup{ @wakeup_called = true }
+      @work_pool.before_work{ @before_work_called = true }
+      @work_pool.after_work{ @after_work_called = true }
     end
     subject{ @work_pool }
 
@@ -137,15 +143,27 @@ class DatWorkerPool
       subject.start
       assert_true @start_called
       assert_true @sleep_called
+
+      @sleep_called = false
       assert_false @wakeup_called
       assert_false @before_work_called
       assert_false @after_work_called
-      @sleep_called = false
       subject.add_work 'work'
       assert_true @wakeup_called
       assert_true @before_work_called
       assert_true @after_work_called
       assert_true @sleep_called
+
+      @before_work_called = false
+      @after_work_called  = false
+      assert_false @before_work_called
+      assert_false @error_called
+      assert_false @after_work_called
+      subject.add_work 'error'
+      assert_true @before_work_called
+      assert_true @error_called
+      assert_false @after_work_called
+
       @wakeup_called = false
       assert_false @shutdown_called
       subject.shutdown

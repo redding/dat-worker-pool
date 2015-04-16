@@ -10,6 +10,7 @@ class DatWorkerPool
 
   attr_reader :logger, :spawned
   attr_reader :queue
+  attr_reader :on_worker_error_callbacks
   attr_reader :on_worker_start_callbacks, :on_worker_shutdown_callbacks
   attr_reader :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
   attr_reader :before_work_callbacks, :after_work_callbacks
@@ -28,6 +29,7 @@ class DatWorkerPool
     @workers = []
     @spawned = 0
 
+    @on_worker_error_callbacks    = []
     @on_worker_start_callbacks    = []
     @on_worker_shutdown_callbacks = [proc{ |worker| despawn_worker(worker) }]
     @on_worker_sleep_callbacks    = [proc{ @workers_waiting.increment }]
@@ -106,7 +108,11 @@ class DatWorkerPool
     rescue ShutdownError => exception
       exception.message.replace "Timed out shutting down the worker pool"
       exception.set_backtrace(caller)
-      @workers.first.raise(exception) until @workers.empty?
+      until @workers.empty?
+        worker = @workers.first
+        worker.raise(exception)
+        worker.join
+      end
       @debug ? raise(exception) : self.logger.error(exception.message)
     end
   end
@@ -117,6 +123,7 @@ class DatWorkerPool
   def on_queue_pop(&block);  @queue.on_pop_callbacks << block;  end
   def on_queue_push(&block); @queue.on_push_callbacks << block; end
 
+  def on_worker_error(&block);    @on_worker_error_callbacks << block;    end
   def on_worker_start(&block);    @on_worker_start_callbacks << block;    end
   def on_worker_shutdown(&block); @on_worker_shutdown_callbacks << block; end
   def on_worker_sleep(&block);    @on_worker_sleep_callbacks << block;    end
@@ -131,6 +138,7 @@ class DatWorkerPool
     @mutex.synchronize do
       Worker.new(@queue).tap do |w|
         w.on_work = proc{ |worker, work_item| do_work(work_item) }
+        w.on_error_callbacks    = @on_worker_error_callbacks
         w.on_start_callbacks    = @on_worker_start_callbacks
         w.on_shutdown_callbacks = @on_worker_shutdown_callbacks
         w.on_sleep_callbacks    = @on_worker_sleep_callbacks
@@ -155,10 +163,6 @@ class DatWorkerPool
 
   def do_work(work_item)
     @do_work_proc.call(work_item)
-  rescue StandardError => exception
-    self.logger.error "Exception raised while doing work!"
-    self.logger.error "#{exception.class}: #{exception.message}"
-    self.logger.error exception.backtrace.join("\n")
   end
 
   class WorkersWaiting
