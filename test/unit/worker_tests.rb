@@ -26,7 +26,7 @@ class DatWorkerPool::Worker
     should have_accessors :on_start_callbacks, :on_shutdown_callbacks
     should have_accessors :on_sleep_callbacks, :on_wakeup_callbacks
     should have_accessors :before_work_callbacks, :after_work_callbacks
-    should have_imeths :start, :shutdown, :join, :running?
+    should have_imeths :start, :shutdown, :join, :raise, :running?
 
     should "default its callbacks" do
       worker = DatWorkerPool::Worker.new(@queue)
@@ -38,7 +38,7 @@ class DatWorkerPool::Worker
       assert_equal [], worker.after_work_callbacks
     end
 
-    should "start a thread with it's work loop with #start" do
+    should "start a thread with it's work loop using `start`" do
       thread = nil
       assert_nothing_raised{ thread = subject.start }
       assert_instance_of Thread, thread
@@ -55,7 +55,7 @@ class DatWorkerPool::Worker
       assert_equal [ 'one', 'two' ], @work_done
     end
 
-    should "flag itself for exiting it's work loop with #shutdown and " \
+    should "flag itself for exiting it's work loop using `shutdown` and " \
            "end it's thread once it's queue is shutdown" do
       thread = subject.start
       subject.join 0.1 # trigger the worker's thread to run, allow it to get into it's
@@ -66,6 +66,25 @@ class DatWorkerPool::Worker
       subject.join 0.1 # trigger the worker's thread to run, should exit
       assert_not thread.alive?
       assert_not subject.running?
+    end
+
+    should "raise an error on the thread using `raise`" do
+      subject.on_work = proc do |worker, work|
+        begin
+          sleep 1
+        rescue RuntimeError => error
+          @work_done << error
+          raise error
+        end
+      end
+      subject.start
+      @queue.push 'a'
+      subject.join 0.1 # trigger the worker's thread to run
+
+      exception = RuntimeError.new
+      subject.raise exception
+      assert_false subject.running?
+      assert_equal [exception], @work_done
     end
 
   end

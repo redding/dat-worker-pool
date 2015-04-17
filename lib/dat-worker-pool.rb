@@ -8,8 +8,6 @@ require 'dat-worker-pool/worker'
 
 class DatWorkerPool
 
-  TimeoutError = Class.new(RuntimeError)
-
   attr_reader :logger, :spawned
   attr_reader :queue
   attr_reader :on_worker_start_callbacks, :on_worker_shutdown_callbacks
@@ -88,6 +86,10 @@ class DatWorkerPool
   # finish.
   # **NOTE** Any work that is left on the queue isn't processed. The controlling
   # application for the worker pool should gracefully handle these items.
+  # **NOTE** Use the `@workers.first until @workers.empty?` pattern instead of
+  # `each`. We don't want to call `join` or `raise` on every worker (especially
+  # if they are shutting down on their own). This is safe, otherwise you might
+  # get a dead thread in the `each`.
   def shutdown(timeout = nil)
     @started = false
     begin
@@ -98,17 +100,13 @@ class DatWorkerPool
         # set before they wakeup.
         @workers.each(&:shutdown)
         @queue.shutdown
-
-        # use this pattern instead of `each` -- we don't want to call `join` on
-        # every worker (especially if they are shutting down on their own), we
-        # just want to make sure that any who haven't had a chance to finish
-        # get to (this is safe, otherwise you might get a dead thread in the
-        # `each`).
         @workers.first.join until @workers.empty?
       end
       proc.call
-    rescue TimeoutError => exception
+    rescue ShutdownError => exception
       exception.message.replace "Timed out shutting down the worker pool"
+      exception.set_backtrace(caller)
+      @workers.first.raise(exception) until @workers.empty?
       @debug ? raise(exception) : self.logger.error(exception.message)
     end
   end
@@ -157,7 +155,7 @@ class DatWorkerPool
 
   def do_work(work_item)
     @do_work_proc.call(work_item)
-  rescue Exception => exception
+  rescue StandardError => exception
     self.logger.error "Exception raised while doing work!"
     self.logger.error "#{exception.class}: #{exception.message}"
     self.logger.error exception.backtrace.join("\n")
@@ -190,8 +188,8 @@ class DatWorkerPool
     def call
       if @timeout
         begin
-          SystemTimer.timeout(@timeout, TimeoutError, &@proc)
-        rescue TimeoutError
+          SystemTimer.timeout(@timeout, ShutdownError, &@proc)
+        rescue ShutdownError
           raise if @reraise
         end
       else
@@ -205,5 +203,10 @@ class DatWorkerPool
       debug ? ::Logger.new(STDOUT) : ::Logger.new(File.open('/dev/null', 'w'))
     end
   end
+
+  # This error should never be "swallowed". If it is caught then be sure to
+  # re-raise it so the workers shutdown. Otherwise workers will be Thread#kill
+  # by ruby which causes lots of issues.
+  ShutdownError = Class.new(Interrupt)
 
 end
