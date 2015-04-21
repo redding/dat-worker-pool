@@ -15,7 +15,7 @@ class DatWorkerPool
     should have_readers :on_worker_start_callbacks, :on_worker_shutdown_callbacks
     should have_readers :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
     should have_readers :before_work_callbacks, :after_work_callbacks
-    should have_imeths :add_work, :start, :shutdown, :despawn_worker
+    should have_imeths :add_work, :start, :shutdown
     should have_imeths :work_items, :waiting
     should have_imeths :worker_available?, :all_spawned_workers_are_busy?
     should have_imeths :reached_max_workers?

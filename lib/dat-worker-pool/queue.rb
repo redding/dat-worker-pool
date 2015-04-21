@@ -7,21 +7,28 @@ class DatWorkerPool
     attr_accessor :on_push_callbacks, :on_pop_callbacks
 
     def initialize
-      @work_items = []
-      @shutdown = false
-      @mutex = Mutex.new
+      @work_items         = []
+      @shutdown           = false
+      @mutex              = Mutex.new
       @condition_variable = ConditionVariable.new
 
       @on_pop_callbacks  = []
       @on_push_callbacks = []
     end
 
-    def work_items
-      @mutex.synchronize{ @work_items }
+    def start
+      @shutdown = false
     end
 
-    # Add the work_item and wake up the first worker (the `signal`) that's
-    # waiting (because of `wait_for_work_item`)
+    # * Wakes up any threads (`@condition_variable.broadcast`) who are sleeping
+    #   because of `pop`.
+    def shutdown
+      @shutdown = true
+      @mutex.synchronize{ @condition_variable.broadcast }
+    end
+
+    # * Add the work and wake up the first thread waiting from calling `pop`
+    #  (`@condition_variable.signal`).
     def push(work_item)
       raise "Unable to add work while shutting down" if @shutdown
       @mutex.synchronize do
@@ -31,6 +38,8 @@ class DatWorkerPool
       @on_push_callbacks.each(&:call)
     end
 
+    # * Sleeps the current thread (`@condition_variable.wait(@mutex)`) until it
+    #   is signaled via `push` or `shutdown`.
     def pop
       return if @shutdown
       item = @mutex.synchronize do
@@ -41,18 +50,12 @@ class DatWorkerPool
       item
     end
 
+    def work_items
+      @mutex.synchronize{ @work_items }
+    end
+
     def empty?
       @mutex.synchronize{ @work_items.empty? }
-    end
-
-    def start
-      @shutdown = false
-    end
-
-    # wake up any workers who are idle (because of `wait_for_work_item`)
-    def shutdown
-      @shutdown = true
-      @mutex.synchronize{ @condition_variable.broadcast }
     end
 
     def shutdown?

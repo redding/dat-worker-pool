@@ -29,12 +29,12 @@ class DatWorkerPool
       @thread ||= Thread.new{ work_loop }
     end
 
-    def running?
-      !!(@thread && @thread.alive?)
-    end
-
     def shutdown
       @shutdown = true
+    end
+
+    def running?
+      !!(@thread && @thread.alive?)
     end
 
     def join(*args)
@@ -51,14 +51,14 @@ class DatWorkerPool
       @on_start_callbacks.each{ |p| p.call(self) }
       loop do
         break if @shutdown
-        process_work
+        fetch_and_do_work
       end
     ensure
       @on_shutdown_callbacks.each{ |p| p.call(self) }
       @thread = nil
     end
 
-    def process_work
+    def fetch_and_do_work
       @on_sleep_callbacks.each{ |p| p.call(self) }
       work_item = @queue.pop
       @on_wakeup_callbacks.each{ |p| p.call(self) }
