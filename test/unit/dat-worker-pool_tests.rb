@@ -244,15 +244,9 @@ class DatWorkerPool
     setup do
       @mutex = Mutex.new
       @finished = []
-      @max_workers = 2
-      @work_pool = DatWorkerPool.new(1, @max_workers, true) do |work|
-        begin
-          sleep 1
-          @mutex.synchronize{ @finished << work }
-        rescue ShutdownError => error
-          @mutex.synchronize{ @finished << error }
-          raise error # re-raise it otherwise worker won't shutdown
-        end
+      @work_pool = DatWorkerPool.new(1, 2, true) do |work|
+        sleep 1
+        @mutex.synchronize{ @finished << work }
       end
       @work_pool.start
       @work_pool.add_work 'a'
@@ -276,23 +270,50 @@ class DatWorkerPool
       assert_includes 'c', subject.work_items
     end
 
-    should "timeout if the workers take to long to finish" do
-      # make sure the workers haven't processed any work
-      assert_equal [], @finished
-      assert_raises(DatWorkerPool::ShutdownError) do
-        subject.shutdown(0.1)
-      end
-      assert_equal @max_workers, @finished.size
-      @finished.each do |error|
-        assert_instance_of DatWorkerPool::ShutdownError, error
-      end
-    end
-
     should "allow jobs to finish by not providing a shutdown timeout" do
       assert_equal [], @finished
       subject.shutdown
       assert_includes 'a', @finished
       assert_includes 'b', @finished
+    end
+
+    should "reraise shutdown errors in debug mode if workers take to long to finish" do
+      assert_raises(DatWorkerPool::ShutdownError) do
+        subject.shutdown(0.1)
+      end
+    end
+
+  end
+
+  class ForcedShutdownTests < UnitTests
+    desc "forced shutdown"
+    setup do
+      @mutex = Mutex.new
+      @finished = []
+      @max_workers = 2
+      # don't put leave the worker pool in debug mode
+      @work_pool = DatWorkerPool.new(1, @max_workers, false) do |work|
+        begin
+          sleep 1
+        rescue ShutdownError => error
+          @mutex.synchronize{ @finished << error }
+          raise error # re-raise it otherwise worker won't shutdown
+        end
+      end
+      @work_pool.start
+      @work_pool.add_work 'a'
+      @work_pool.add_work 'b'
+      @work_pool.add_work 'c'
+    end
+
+    should "force workers to shutdown if they take to long to finish" do
+      # make sure the workers haven't processed any work
+      assert_equal [], @finished
+      subject.shutdown(0.1)
+      assert_equal @max_workers, @finished.size
+      @finished.each do |error|
+        assert_instance_of DatWorkerPool::ShutdownError, error
+      end
     end
 
   end

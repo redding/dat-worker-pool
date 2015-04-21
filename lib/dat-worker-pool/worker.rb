@@ -47,17 +47,25 @@ class DatWorkerPool
 
     private
 
+    # * Rescue `ShutdownError` but don't do anything with it. We want to handle
+    #   the error but we just want it to cause the worker to exit its work loop.
+    #   If the `ShutdownError` isn't rescued, it will be raised when the worker
+    #   is joined.
     def work_loop
       @on_start_callbacks.each{ |p| p.call(self) }
       loop do
         break if @shutdown
         fetch_and_do_work
       end
+    rescue ShutdownError
     ensure
       @on_shutdown_callbacks.each{ |p| p.call(self) }
       @thread = nil
     end
 
+    # * Rescue `ShutdownError` but re-raise it after calling the error
+    #   callbacks. This ensures it causes the work loop to exit (see
+    #   `work_loop`).
     def fetch_and_do_work
       @on_sleep_callbacks.each{ |p| p.call(self) }
       work_item = @queue.pop
