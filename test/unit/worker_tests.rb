@@ -190,6 +190,8 @@ class DatWorkerPool::Worker
       @queue.push('work')
       assert_equal [subject, exception, 'work'], @on_error_called_with
       assert_false thread.alive?
+      # ensure the shutdown error is handled and isn't thrown when we join
+      assert_nothing_raised{ thread.join }
     end
 
   end

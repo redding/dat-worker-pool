@@ -53,7 +53,7 @@ class DatWorkerPool
     begin
       OptionalTimeout.new(timeout){ graceful_shutdown }
     rescue TimeoutError
-      force_shutdown(caller)
+      force_shutdown(timeout, caller)
     end
   end
 
@@ -129,13 +129,18 @@ class DatWorkerPool
   #   raise and join all the workers. While we are raising and joining a worker
   #   a separate worker can shutdown and remove itself from the `@workers`
   #   array.
-  def force_shutdown(backtrace)
-    error = ShutdownError.new("Timed out shutting down the worker pool")
+  # * `rescue false` when joining the workers. Ruby will raise any exceptions
+  #   that aren't handled by a thread when its joined. This ensures if the hard
+  #   shutdown is raised and not rescued (for example, in the workers ensure),
+  #   then it won't cause the forced shutdown to end prematurely.
+  def force_shutdown(timeout, backtrace)
+    error = ShutdownError.new "Timed out shutting down the worker pool " \
+                              "(#{timeout} seconds)."
     error.set_backtrace(backtrace)
     until @workers.empty?
       worker = @workers.first
       worker.raise(error)
-      worker.join
+      worker.join rescue false
     end
     raise error if @debug
   end
