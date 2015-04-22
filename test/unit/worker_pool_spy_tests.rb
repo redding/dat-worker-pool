@@ -14,6 +14,7 @@ class DatWorkerPool::WorkerPoolSpy
     should have_readers :work_proc, :work_items
     should have_readers :start_called, :shutdown_called, :shutdown_timeout
     should have_readers :on_queue_pop_callbacks, :on_queue_push_callbacks
+    should have_readers :on_worker_error_callbacks
     should have_readers :on_worker_start_callbacks, :on_worker_shutdown_callbacks
     should have_readers :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
     should have_readers :before_work_callbacks, :after_work_callbacks
@@ -21,6 +22,7 @@ class DatWorkerPool::WorkerPoolSpy
     should have_imeths :worker_available?, :queue_empty?
     should have_imeths :add_work, :start, :shutdown
     should have_imeths :on_queue_pop, :on_queue_push
+    should have_imeths :on_worker_error
     should have_imeths :on_worker_start, :on_worker_shutdown
     should have_imeths :on_worker_sleep, :on_worker_wakeup
     should have_imeths :before_work, :after_work
@@ -100,6 +102,11 @@ class DatWorkerPool::WorkerPoolSpy
       callback = proc{ }
       subject.on_queue_push(&callback)
       assert_equal [callback], subject.on_queue_push_callbacks
+
+      assert_equal [], subject.on_worker_error_callbacks
+      callback = proc{ }
+      subject.on_worker_error(&callback)
+      assert_equal [callback], subject.on_worker_error_callbacks
 
       assert_equal [], subject.on_worker_start_callbacks
       callback = proc{ }
