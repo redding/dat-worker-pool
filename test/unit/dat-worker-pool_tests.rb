@@ -10,15 +10,14 @@ class DatWorkerPool
     end
     subject{ @work_pool }
 
-    should have_readers :logger, :spawned, :queue
+    should have_readers :logger, :queue
     should have_readers :on_worker_error_callbacks
     should have_readers :on_worker_start_callbacks, :on_worker_shutdown_callbacks
     should have_readers :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
     should have_readers :before_work_callbacks, :after_work_callbacks
     should have_imeths :add_work, :start, :shutdown
     should have_imeths :work_items, :waiting
-    should have_imeths :worker_available?, :all_spawned_workers_are_busy?
-    should have_imeths :reached_max_workers?
+    should have_imeths :worker_available?
     should have_imeths :queue_empty?
     should have_imeths :on_queue_pop_callbacks, :on_queue_push_callbacks
     should have_imeths :on_queue_pop, :on_queue_push
@@ -29,7 +28,6 @@ class DatWorkerPool
 
     should "know its attributes" do
       assert_instance_of ::Logger, subject.logger
-      assert_equal 0, subject.spawned
       assert_instance_of Queue, subject.queue
     end
 
@@ -60,55 +58,34 @@ class DatWorkerPool
   class WorkerBehaviorTests < UnitTests
     desc "workers"
     setup do
-      @work_pool = DatWorkerPool.new(1, 2, true){ |work| sleep(work) }
+      @work_pool = DatWorkerPool.new(2, true){ |work| sleep(work) }
       @work_pool.start
     end
 
-    should "be created as needed and only go up to the maximum number allowed" do
-      # the minimum should be spawned and waiting
-      assert_equal 1, @work_pool.spawned
-      assert_equal 1, @work_pool.waiting
-      assert_equal true,  @work_pool.worker_available?
-      assert_equal false, @work_pool.all_spawned_workers_are_busy?
-      assert_equal false, @work_pool.reached_max_workers?
+    should "spawn and wait until work is available" do
+      # the workers should be spawned and waiting
+      assert_equal 2,    @work_pool.waiting
+      assert_equal true, @work_pool.worker_available?
 
-      # the minimum should be spawned, but no longer waiting
+      # only one worker should be waiting
       @work_pool.add_work 5
-      assert_equal 1, @work_pool.spawned
-      assert_equal 0, @work_pool.waiting
-      assert_equal true,  @work_pool.worker_available?
-      assert_equal true,  @work_pool.all_spawned_workers_are_busy?
-      assert_equal false, @work_pool.reached_max_workers?
+      assert_equal 1,    @work_pool.waiting
+      assert_equal true, @work_pool.worker_available?
 
-      # an additional worker should be spawned
+      # neither worker should be waiting now
       @work_pool.add_work 5
-      assert_equal 2, @work_pool.spawned
-      assert_equal 0, @work_pool.waiting
+      assert_equal 0,     @work_pool.waiting
       assert_equal false, @work_pool.worker_available?
-      assert_equal true,  @work_pool.all_spawned_workers_are_busy?
-      assert_equal true,  @work_pool.reached_max_workers?
-
-      # no additional workers are spawned, the work waits to be processed
-      @work_pool.add_work 5
-      assert_equal 2, @work_pool.spawned
-      assert_equal 0, @work_pool.waiting
-      assert_equal false, @work_pool.worker_available?
-      assert_equal true,  @work_pool.all_spawned_workers_are_busy?
-      assert_equal true, @work_pool.reached_max_workers?
     end
 
     should "go back to waiting when they finish working" do
-      assert_equal 1, @work_pool.spawned
-      assert_equal 1, @work_pool.waiting
-
+      assert_equal 2, @work_pool.waiting
       @work_pool.add_work 1
-      assert_equal 1, @work_pool.spawned
-      assert_equal 0, @work_pool.waiting
+      assert_equal 1, @work_pool.waiting
 
       sleep 1 # allow the worker to run
 
-      assert_equal 1, @work_pool.spawned
-      assert_equal 1, @work_pool.waiting
+      assert_equal 2, @work_pool.waiting
     end
 
   end
@@ -205,7 +182,6 @@ class DatWorkerPool
       worker = subject.instance_variable_get("@workers").first
       sleep 0.1
 
-      assert_equal 1, subject.spawned
       assert_equal 1, subject.waiting
       assert worker.instance_variable_get("@thread").alive?
     end
@@ -229,14 +205,6 @@ class DatWorkerPool
       assert_false subject.queue.shutdown?
     end
 
-    should "keep workers from being spawned until its called" do
-      assert_equal 0, subject.spawned
-      subject.add_work 1
-      assert_equal 0, subject.spawned
-      subject.start
-      assert_equal 1, subject.spawned
-    end
-
   end
 
   class ShutdownTests < UnitTests
@@ -244,7 +212,7 @@ class DatWorkerPool
     setup do
       @mutex = Mutex.new
       @finished = []
-      @work_pool = DatWorkerPool.new(1, 2, true) do |work|
+      @work_pool = DatWorkerPool.new(2, true) do |work|
         sleep 1
         @mutex.synchronize{ @finished << work }
       end
@@ -265,7 +233,6 @@ class DatWorkerPool
       assert_includes     'b', @finished
       assert_not_includes 'c', @finished
 
-      assert_equal 0, subject.spawned
       assert_equal 0, subject.waiting
       assert_includes 'c', subject.work_items
     end
@@ -292,7 +259,7 @@ class DatWorkerPool
       @finished = []
       @max_workers = 2
       # don't put leave the worker pool in debug mode
-      @work_pool = DatWorkerPool.new(1, @max_workers, false) do |work|
+      @work_pool = DatWorkerPool.new(@max_workers, false) do |work|
         begin
           sleep 1
         rescue ShutdownError => error
