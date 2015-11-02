@@ -117,13 +117,13 @@ class DatWorkerPool
   #   shutdown is raised and not rescued (for example, in the workers ensure),
   #   then it won't cause the forced shutdown to end prematurely.
   def force_shutdown(timeout, backtrace)
-    error = ShutdownError.new "Timed out shutting down the worker pool " \
-                              "(#{timeout} seconds)."
+    error = ShutdownError.new "Timed out shutting down (#{timeout} seconds)."
     error.set_backtrace(backtrace)
     until @workers.empty?
       worker = @workers.first
       worker.raise(error)
       worker.join rescue false
+      @workers.delete(worker)
     end
     raise error if @debug
   end

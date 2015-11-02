@@ -1,6 +1,8 @@
 require 'assert'
 require 'dat-worker-pool'
 
+require 'system_timer'
+
 class DatWorkerPool
 
   class UnitTests < Assert::Context
@@ -252,37 +254,78 @@ class DatWorkerPool
 
   end
 
-  class ForcedShutdownTests < UnitTests
+  class ForceShutdownSetupTests < UnitTests
     desc "forced shutdown"
     setup do
-      @mutex = Mutex.new
-      @finished = []
-      @max_workers = 2
-      # don't put leave the worker pool in debug mode
-      @work_pool = DatWorkerPool.new(@max_workers, false) do |work|
-        begin
-          sleep 1
-        rescue ShutdownError => error
-          @mutex.synchronize{ @finished << error }
-          raise error # re-raise it otherwise worker won't shutdown
-        end
+      # this makes the worker pool force shutdown, by raising timeout error we
+      # are saying the graceful shutdown timed out
+      Assert.stub(OptionalTimeout, :new){ raise TimeoutError }
+
+      @num_workers = Factory.integer(4)
+      @work_pool = DatWorkerPool.new(@num_workers){ }
+    end
+
+  end
+
+  class ForcedShutdownTests < ForceShutdownSetupTests
+    setup do
+      @workers = @num_workers.times.map do
+        ForceShutdownSpyWorker.new(@work_pool.queue)
       end
+      stub_workers = @workers.dup
+      Assert.stub(Worker, :new){ stub_workers.pop }
+
       @work_pool.start
-      @work_pool.add_work 'a'
-      @work_pool.add_work 'b'
-      @work_pool.add_work 'c'
     end
 
-    should "force workers to shutdown if they take to long to finish" do
-      # make sure the workers haven't processed any work
-      assert_equal [], @finished
-      subject.shutdown(0.1)
-      assert_equal @max_workers, @finished.size
-      @finished.each do |error|
-        assert_instance_of DatWorkerPool::ShutdownError, error
+    should "force workers to shutdown by raising an error in their thread" do
+      subject.shutdown(Factory.integer)
+
+      @workers.each do |worker|
+        assert_instance_of ShutdownError, worker.raised_error
+        assert_true worker.joined
       end
     end
 
+  end
+
+  class ForcedShutdownWithErrorsWhileJoiningTests < ForceShutdownSetupTests
+    desc "forced shutdown with errors while joining worker threads"
+    setup do
+      @workers = @num_workers.times.map do
+        ForceShutdownJoinErrorWorker.new(@work_pool.queue)
+      end
+      Assert.stub(Worker, :new){ @workers.pop }
+
+      @work_pool.start
+    end
+
+    should "not raise any errors and continue shutting down" do
+      # if this is broken its possible it can create an infinite loop, so we
+      # time it out and let it throw an exception
+      SystemTimer.timeout(1) do
+        assert_nothing_raised{ subject.shutdown(Factory.integer) }
+      end
+    end
+
+  end
+
+  class ForceShutdownSpyWorker < Worker
+    attr_reader :raised_error, :joined
+
+    def start; end
+    def raise(error); @raised_error = error; end
+    def join; @joined = true; end
+  end
+
+  # this creates a rare scenario where as we are joining a worker, it throws
+  # an error; this can happen when force shutting down a worker; we raise an
+  # error in the worker thread to force it to shut down, the error can be raised
+  # at any point in the worker thread, including its ensure block in its
+  # `work_loop`, if this happens, we will get the error raised when we `join`
+  # the worker thread
+  class ForceShutdownJoinErrorWorker < ForceShutdownSpyWorker
+    def join; raise Factory.exception; end
   end
 
 end
