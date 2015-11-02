@@ -8,16 +8,14 @@ require 'dat-worker-pool/worker'
 
 class DatWorkerPool
 
-  attr_reader :logger, :spawned
-  attr_reader :queue
+  attr_reader :logger, :queue
   attr_reader :on_worker_error_callbacks
   attr_reader :on_worker_start_callbacks, :on_worker_shutdown_callbacks
   attr_reader :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
   attr_reader :before_work_callbacks, :after_work_callbacks
 
-  def initialize(min = 0, max = 1, debug = false, &do_work_proc)
-    @min_workers  = min
-    @max_workers  = max
+  def initialize(num_workers = 1, debug = false, &do_work_proc)
+    @num_workers  = num_workers
     @debug        = debug
     @logger       = Logger.new(@debug)
     @do_work_proc = do_work_proc
@@ -27,7 +25,6 @@ class DatWorkerPool
 
     @mutex   = Mutex.new
     @workers = []
-    @spawned = 0
 
     @on_worker_error_callbacks    = []
     @on_worker_start_callbacks    = []
@@ -43,7 +40,7 @@ class DatWorkerPool
   def start
     @started = true
     @queue.start
-    @min_workers.times{ spawn_worker }
+    @num_workers.times{ spawn_worker }
   end
 
   # * All work on the queue is left on the queue. It's up to the controlling
@@ -57,15 +54,9 @@ class DatWorkerPool
     end
   end
 
-  # * Always check if all workers are busy before pushing the work because
-  #   `@queue.push` can wakeup a worker. If you check after, you can see all
-  #   workers are busy because one just wokeup to handle what was just pushed.
-  #   This would cause it to spawn a worker when one isn't needed.
   def add_work(work_item)
     return if work_item.nil?
-    new_worker_needed = self.all_spawned_workers_are_busy?
     @queue.push work_item
-    spawn_worker if @started && new_worker_needed && !reached_max_workers?
   end
 
   def work_items
@@ -81,15 +72,7 @@ class DatWorkerPool
   end
 
   def worker_available?
-    !reached_max_workers? || @workers_waiting.count > 0
-  end
-
-  def all_spawned_workers_are_busy?
-    @workers_waiting.count <= 0
-  end
-
-  def reached_max_workers?
-    @mutex.synchronize{ @spawned >= @max_workers }
+    @workers_waiting.count > 0
   end
 
   def on_queue_pop_callbacks;  @queue.on_pop_callbacks;  end
@@ -162,7 +145,6 @@ class DatWorkerPool
       w.after_work_callbacks  = @after_work_callbacks
 
       @workers << w
-      @spawned += 1
 
       w.start
     end
@@ -173,7 +155,6 @@ class DatWorkerPool
   end
 
   def despawn_worker!(worker)
-    @spawned -= 1
     @workers.delete worker
   end
 

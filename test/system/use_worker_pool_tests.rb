@@ -7,7 +7,7 @@ class UseWorkerPoolTests < Assert::Context
   setup do
     @mutex = Mutex.new
     @results = []
-    @work_pool = DatWorkerPool.new(1, 2, !!ENV['DEBUG']) do |work|
+    @work_pool = DatWorkerPool.new(2, !!ENV['DEBUG']) do |work|
       @mutex.synchronize{ @results << (work * 100) }
     end
     @work_pool.start

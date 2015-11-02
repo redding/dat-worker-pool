@@ -11,6 +11,7 @@ class DatWorkerPool::WorkerPoolSpy
     end
     subject{ @worker_pool_spy }
 
+    should have_readers :num_workers, :debug
     should have_readers :work_proc, :work_items
     should have_readers :start_called, :shutdown_called, :shutdown_timeout
     should have_readers :on_queue_pop_callbacks, :on_queue_push_callbacks
