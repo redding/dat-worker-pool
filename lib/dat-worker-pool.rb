@@ -8,17 +8,25 @@ require 'dat-worker-pool/worker'
 
 class DatWorkerPool
 
-  attr_reader :logger, :queue
+  DEFAULT_NUM_WORKERS = 1
+  MIN_WORKERS         = 1
+
+  attr_reader :num_workers, :logger
+  attr_reader :queue
   attr_reader :on_worker_error_callbacks
   attr_reader :on_worker_start_callbacks, :on_worker_shutdown_callbacks
   attr_reader :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
   attr_reader :before_work_callbacks, :after_work_callbacks
 
-  def initialize(num_workers = 1, debug = false, &do_work_proc)
-    @num_workers  = num_workers
-    @debug        = debug
-    @logger       = Logger.new(@debug)
-    @do_work_proc = do_work_proc
+  def initialize(options = nil)
+    options ||= {}
+    @do_work_proc = options[:do_work_proc]
+    @num_workers  = (options[:num_workers] || DEFAULT_NUM_WORKERS).to_i
+    @logger       = options[:logger] || NullLogger.new
+
+    if @num_workers < MIN_WORKERS
+      raise ArgumentError, "number of workers must be at least #{MIN_WORKERS}"
+    end
 
     @queue           = Queue.new
     @workers_waiting = WorkersWaiting.new
@@ -125,7 +133,6 @@ class DatWorkerPool
       worker.join rescue false
       @workers.delete(worker)
     end
-    raise error if @debug
   end
 
   def spawn_worker
@@ -185,9 +192,9 @@ class DatWorkerPool
     end
   end
 
-  module Logger
-    def self.new(debug)
-      debug ? ::Logger.new(STDOUT) : ::Logger.new(File.open('/dev/null', 'w'))
+  class NullLogger
+    ::Logger::Severity.constants.each do |name|
+      define_method(name.downcase){ |*args| } # no-op
     end
   end
 

@@ -8,11 +8,26 @@ class DatWorkerPool
   class UnitTests < Assert::Context
     desc "DatWorkerPool"
     setup do
-      @work_pool = DatWorkerPool.new{ }
+      @worker_pool_class = DatWorkerPool
     end
-    subject{ @work_pool }
+    subject{ @worker_pool_class }
 
-    should have_readers :logger, :queue
+    should "know its default and min number of workers" do
+      assert_equal 1, DEFAULT_NUM_WORKERS
+      assert_equal 1, MIN_WORKERS
+    end
+
+  end
+
+  class InitTests < UnitTests
+    desc "when init"
+    setup do
+      @worker_pool = @worker_pool_class.new(:do_work_proc => proc{ })
+    end
+    subject{ @worker_pool }
+
+    should have_readers :num_workers, :logger
+    should have_readers :queue
     should have_readers :on_worker_error_callbacks
     should have_readers :on_worker_start_callbacks, :on_worker_shutdown_callbacks
     should have_readers :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
@@ -28,12 +43,11 @@ class DatWorkerPool
     should have_imeths :on_worker_sleep, :on_worker_wakeup
     should have_imeths :before_work, :after_work
 
-    should "know its attributes" do
-      assert_instance_of ::Logger, subject.logger
+    should "default its attributes" do
+      assert_equal DEFAULT_NUM_WORKERS, subject.num_workers
+      assert_instance_of NullLogger, subject.logger
       assert_instance_of Queue, subject.queue
-    end
 
-    should "default its worker callbacks" do
       assert_equal [], subject.on_worker_error_callbacks
       assert_equal [], subject.on_worker_start_callbacks
       assert_equal 1, subject.on_worker_shutdown_callbacks.size
@@ -46,7 +60,19 @@ class DatWorkerPool
       assert_equal [], subject.after_work_callbacks
     end
 
-    should "demeter its queue's callbacks" do
+    should "allow customizing it by passing options" do
+      num_workers = Factory.integer
+      logger      = Logger.new(STDOUT)
+      worker_pool = @worker_pool_class.new({
+        :num_workers  => num_workers,
+        :logger       => logger,
+        :do_work_proc => proc{ }
+      })
+      assert_equal num_workers, worker_pool.num_workers
+      assert_equal logger,      worker_pool.logger
+    end
+
+    should "demeter its queue callbacks" do
       callback = proc{ }
       subject.on_queue_pop(&callback)
       assert_equal [callback], subject.on_queue_pop_callbacks
@@ -55,43 +81,42 @@ class DatWorkerPool
       assert_equal [callback], subject.on_queue_push_callbacks
     end
 
-  end
-
-  class WorkerBehaviorTests < UnitTests
-    desc "workers"
-    setup do
-      @work_pool = DatWorkerPool.new(2, true){ |work| sleep(work) }
-      @work_pool.start
+    # TODO - stub queue once we can pass a queue instance to worker pool
+    should "know if its queue is empty or not" do
+      assert_equal true, subject.queue_empty?
+      subject.add_work Factory.string
+      assert_equal false, subject.queue_empty?
     end
 
-    should "spawn and wait until work is available" do
-      # the workers should be spawned and waiting
-      assert_equal 2,    @work_pool.waiting
-      assert_equal true, @work_pool.worker_available?
-
-      # only one worker should be waiting
-      @work_pool.add_work 5
-      assert_equal 1,    @work_pool.waiting
-      assert_equal true, @work_pool.worker_available?
-
-      # neither worker should be waiting now
-      @work_pool.add_work 5
-      assert_equal 0,     @work_pool.waiting
-      assert_equal false, @work_pool.worker_available?
+    # TODO - once we pass queue, test shutdown changes on queue
+    should "start its queue when its started" do
+      assert_false subject.queue.shutdown?
+      subject.start
+      assert_false subject.queue.shutdown?
+      subject.shutdown
+      assert_true subject.queue.shutdown?
+      subject.start
+      assert_false subject.queue.shutdown?
     end
 
-    should "go back to waiting when they finish working" do
-      assert_equal 2, @work_pool.waiting
-      @work_pool.add_work 1
-      assert_equal 1, @work_pool.waiting
+    # TODO - once we pass worker class
+    should "spawn workers when its started" do
+      skip
+    end
 
-      sleep 1 # allow the worker to run
-
-      assert_equal 2, @work_pool.waiting
+    should "raise an argument error if given an invalid number of workers" do
+      assert_raises(ArgumentError) do
+        @worker_pool_class.new({
+          :num_workers  => [0, (Factory.integer * -1)].choice,
+          :do_work_proc => proc{ }
+        })
+      end
     end
 
   end
 
+  # TODO - change once a custom worker class can be provided, these probably go
+  # away
   class WorkerCallbackTests < UnitTests
     desc "worker callbacks"
     setup do
@@ -103,18 +128,20 @@ class DatWorkerPool
       @before_work_called = false
       @after_work_called  = false
 
-      @work_pool = DatWorkerPool.new(1) do |work|
-        raise work if work == 'error'
-      end
-      @work_pool.on_worker_error{ @error_called = true }
-      @work_pool.on_worker_start{ @start_called = true }
-      @work_pool.on_worker_shutdown{ @shutdown_called = true }
-      @work_pool.on_worker_sleep{ @sleep_called = true }
-      @work_pool.on_worker_wakeup{ @wakeup_called = true }
-      @work_pool.before_work{ @before_work_called = true }
-      @work_pool.after_work{ @after_work_called = true }
+      @worker_pool = @worker_pool_class.new({
+        :do_work_proc => proc do |work|
+          raise work if work == 'error'
+        end
+      })
+      @worker_pool.on_worker_error{ @error_called = true }
+      @worker_pool.on_worker_start{ @start_called = true }
+      @worker_pool.on_worker_shutdown{ @shutdown_called = true }
+      @worker_pool.on_worker_sleep{ @sleep_called = true }
+      @worker_pool.on_worker_wakeup{ @wakeup_called = true }
+      @worker_pool.before_work{ @before_work_called = true }
+      @worker_pool.after_work{ @after_work_called = true }
     end
-    subject{ @work_pool }
+    subject{ @worker_pool }
 
     should "call the worker callbacks as workers wait or wakeup" do
       assert_false @start_called
@@ -152,33 +179,27 @@ class DatWorkerPool
 
   end
 
-  class AddWorkWithNoWorkersTests < UnitTests
-    setup do
-      @work_pool = DatWorkerPool.new(0, 0){ |work| }
-    end
-
-    should "return whether or not the queue is empty" do
-      assert_equal true, @work_pool.queue_empty?
-      @work_pool.add_work 'test'
-      assert_equal false, @work_pool.queue_empty?
-    end
-
-  end
-
+  # TODO - remove once we pass a custom worker class and queue `add_work` can
+  # be tested in the `InitTests` once we can pass a queue; the `process` method
+  # should go away once we can pass a worker class
   class AddWorkAndProcessItTests < UnitTests
     desc "add_work and process"
     setup do
       @result = nil
-      @work_pool = DatWorkerPool.new(1){|work| @result = (2 / work) }
-      @work_pool.start
+      @worker_pool = @worker_pool_class.new({
+        :do_work_proc => proc{ |work| @result = (2 / work) }
+      })
+      @worker_pool.start
     end
+    subject{ @worker_pool }
 
-    should "have added the work and processed it by calling the passed block" do
+    should "add the work and processed it by calling the passed block" do
       subject.add_work 2
       sleep 0.1 # ensure worker thread get's a chance to run
       assert_equal 1, @result
     end
 
+    # TODO - move to worker tests ? or remove if we already have it
     should "swallow exceptions, so workers don't end unexpectedly" do
       subject.add_work 0
       worker = subject.instance_variable_get("@workers").first
@@ -190,67 +211,8 @@ class DatWorkerPool
 
   end
 
-  class StartTests < UnitTests
-    desc "start"
-    setup do
-      @work_pool = DatWorkerPool.new(1, 2){ |work| sleep(work) }
-    end
-    subject{ @work_pool }
-
-    should "start its queue" do
-      assert_false subject.queue.shutdown?
-      subject.start
-      assert_false subject.queue.shutdown?
-      subject.shutdown
-      assert_true subject.queue.shutdown?
-      subject.start
-      assert_false subject.queue.shutdown?
-    end
-
-  end
-
+  # TODO - once we can pass a custom worker class
   class ShutdownTests < UnitTests
-    desc "shutdown"
-    setup do
-      @mutex = Mutex.new
-      @finished = []
-      @work_pool = DatWorkerPool.new(2, true) do |work|
-        sleep 1
-        @mutex.synchronize{ @finished << work }
-      end
-      @work_pool.start
-      @work_pool.add_work 'a'
-      @work_pool.add_work 'b'
-      @work_pool.add_work 'c'
-    end
-
-    should "allow any work that has been picked up to be processed" do
-      # make sure the workers haven't processed any work
-      assert_equal [], @finished
-      subject.shutdown(5)
-
-      # NOTE, the last work shouldn't have been processed, as it wasn't
-      # picked up by a worker
-      assert_includes     'a', @finished
-      assert_includes     'b', @finished
-      assert_not_includes 'c', @finished
-
-      assert_equal 0, subject.waiting
-      assert_includes 'c', subject.work_items
-    end
-
-    should "allow jobs to finish by not providing a shutdown timeout" do
-      assert_equal [], @finished
-      subject.shutdown
-      assert_includes 'a', @finished
-      assert_includes 'b', @finished
-    end
-
-    should "reraise shutdown errors in debug mode if workers take to long to finish" do
-      assert_raises(DatWorkerPool::ShutdownError) do
-        subject.shutdown(0.1)
-      end
-    end
 
   end
 
@@ -262,20 +224,24 @@ class DatWorkerPool
       Assert.stub(OptionalTimeout, :new){ raise TimeoutError }
 
       @num_workers = Factory.integer(4)
-      @work_pool = DatWorkerPool.new(@num_workers){ }
+      @worker_pool = DatWorkerPool.new({
+        :num_workers  => @num_workers,
+        :do_work_proc => proc{ }
+      })
     end
+    subject{ @worker_pool }
 
   end
 
   class ForcedShutdownTests < ForceShutdownSetupTests
     setup do
       @workers = @num_workers.times.map do
-        ForceShutdownSpyWorker.new(@work_pool.queue)
+        ForceShutdownSpyWorker.new(@worker_pool.queue)
       end
       stub_workers = @workers.dup
       Assert.stub(Worker, :new){ stub_workers.pop }
 
-      @work_pool.start
+      @worker_pool.start
     end
 
     should "force workers to shutdown by raising an error in their thread" do
@@ -293,11 +259,11 @@ class DatWorkerPool
     desc "forced shutdown with errors while joining worker threads"
     setup do
       @workers = @num_workers.times.map do
-        ForceShutdownJoinErrorWorker.new(@work_pool.queue)
+        ForceShutdownJoinErrorWorker.new(@worker_pool.queue)
       end
       Assert.stub(Worker, :new){ @workers.pop }
 
-      @work_pool.start
+      @worker_pool.start
     end
 
     should "not raise any errors and continue shutting down" do
@@ -307,6 +273,17 @@ class DatWorkerPool
         assert_nothing_raised{ subject.shutdown(Factory.integer) }
       end
     end
+
+  end
+
+  class NullLoggerTests < UnitTests
+    desc "NullLogger"
+    setup do
+      @logger = NullLogger.new
+    end
+    subject{ @logger }
+
+    should have_imeths :debug, :info, :error
 
   end
 
