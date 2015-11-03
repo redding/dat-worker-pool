@@ -83,14 +83,15 @@ class DatWorkerPool
 
     # TODO - stub queue once we can pass a queue instance to worker pool
     should "know if its queue is empty or not" do
-      assert_equal true, subject.queue_empty?
-      subject.add_work Factory.string
-      assert_equal false, subject.queue_empty?
+      assert_true subject.queue_empty?
+      subject.queue.start
+      subject.queue.push Factory.string
+      assert_false subject.queue_empty?
     end
 
     # TODO - once we pass queue, test shutdown changes on queue
     should "start its queue when its started" do
-      assert_false subject.queue.shutdown?
+      assert_true subject.queue.shutdown?
       subject.start
       assert_false subject.queue.shutdown?
       subject.shutdown

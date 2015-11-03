@@ -9,7 +9,7 @@ class DatWorkerPool::Worker
   class UnitTests < Assert::Context
     desc "DatWorkerPool::Worker"
     setup do
-      @queue = DatWorkerPool::DefaultQueue.new
+      @queue = DatWorkerPool::DefaultQueue.new.tap(&:start)
       @work_done = []
       @worker = DatWorkerPool::Worker.new(@queue).tap do |w|
         w.on_work = proc{ |worker, work| @work_done << work }

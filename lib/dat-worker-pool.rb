@@ -4,6 +4,7 @@ require 'thread'
 
 require 'dat-worker-pool/version'
 require 'dat-worker-pool/default_queue'
+require 'dat-worker-pool/queue'
 require 'dat-worker-pool/worker'
 
 class DatWorkerPool
@@ -83,11 +84,11 @@ class DatWorkerPool
     @workers_waiting.count > 0
   end
 
-  def on_queue_pop_callbacks;  @queue.on_pop_callbacks;  end
   def on_queue_push_callbacks; @queue.on_push_callbacks; end
+  def on_queue_pop_callbacks;  @queue.on_pop_callbacks;  end
 
-  def on_queue_pop(&block);  @queue.on_pop_callbacks  << block; end
-  def on_queue_push(&block); @queue.on_push_callbacks << block; end
+  def on_queue_push(&block); @queue.on_push(&block); end
+  def on_queue_pop(&block);  @queue.on_pop(&block);  end
 
   def on_worker_error(&block);    @on_worker_error_callbacks    << block; end
   def on_worker_start(&block);    @on_worker_start_callbacks    << block; end
