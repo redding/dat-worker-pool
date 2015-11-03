@@ -46,7 +46,7 @@ class DatWorkerPool
     should "default its attributes" do
       assert_equal DEFAULT_NUM_WORKERS, subject.num_workers
       assert_instance_of NullLogger, subject.logger
-      assert_instance_of Queue, subject.queue
+      assert_instance_of DatWorkerPool::DefaultQueue, subject.queue
 
       assert_equal [], subject.on_worker_error_callbacks
       assert_equal [], subject.on_worker_start_callbacks

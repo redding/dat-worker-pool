@@ -3,7 +3,7 @@ require 'system_timer'
 require 'thread'
 
 require 'dat-worker-pool/version'
-require 'dat-worker-pool/queue'
+require 'dat-worker-pool/default_queue'
 require 'dat-worker-pool/worker'
 
 class DatWorkerPool
@@ -28,7 +28,7 @@ class DatWorkerPool
       raise ArgumentError, "number of workers must be at least #{MIN_WORKERS}"
     end
 
-    @queue           = Queue.new
+    @queue           = DatWorkerPool::DefaultQueue.new
     @workers_waiting = WorkersWaiting.new
 
     @mutex   = Mutex.new

@@ -2,14 +2,14 @@ require 'assert'
 require 'dat-worker-pool/worker'
 
 require 'dat-worker-pool'
-require 'dat-worker-pool/queue'
+require 'dat-worker-pool/default_queue'
 
 class DatWorkerPool::Worker
 
   class UnitTests < Assert::Context
     desc "DatWorkerPool::Worker"
     setup do
-      @queue = DatWorkerPool::Queue.new
+      @queue = DatWorkerPool::DefaultQueue.new
       @work_done = []
       @worker = DatWorkerPool::Worker.new(@queue).tap do |w|
         w.on_work = proc{ |worker, work| @work_done << work }
