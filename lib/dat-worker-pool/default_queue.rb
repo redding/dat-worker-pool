@@ -2,7 +2,7 @@ require 'thread'
 
 class DatWorkerPool
 
-  class Queue
+  class DefaultQueue
 
     attr_accessor :on_push_callbacks, :on_pop_callbacks
 

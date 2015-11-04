@@ -1,12 +1,12 @@
 require 'assert'
-require 'dat-worker-pool/queue'
+require 'dat-worker-pool/default_queue'
 
-class DatWorkerPool::Queue
+class DatWorkerPool::DefaultQueue
 
   class UnitTests < Assert::Context
-    desc "DatWorkerPool::Queue"
+    desc "DatWorkerPool::DefaultQueue"
     setup do
-      @queue = DatWorkerPool::Queue.new
+      @queue = DatWorkerPool::DefaultQueue.new
     end
     subject{ @queue }
 
