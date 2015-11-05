@@ -42,7 +42,7 @@ class DatWorkerPool
         @work_items << work_item
         @cond_var.signal
       end
-      @on_push_callbacks.each(&:call)
+      @on_push_callbacks.each{ |p| p.call(self, work_item) }
     end
 
     # check if the queue is empty, if so sleep (`@cond_var.wait(@mutex)`) until
@@ -56,7 +56,7 @@ class DatWorkerPool
         end
         @work_items.shift unless self.shutdown?
       end
-      @on_pop_callbacks.each(&:call)
+      @on_pop_callbacks.each{ |p| p.call(self, work_item) } if !work_item.nil?
       work_item
     end
 
