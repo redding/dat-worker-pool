@@ -113,7 +113,7 @@ class DatWorkerPool
       assert_not_includes 'c', @finished
 
       assert_equal 0, subject.waiting
-      assert_includes 'c', subject.work_items
+      assert_includes 'c', subject.queue.work_items
     end
 
     should "allow jobs to finish by not providing a shutdown timeout" do
