@@ -111,10 +111,17 @@ class DatWorkerPool::DefaultQueue
     end
 
     should "run on push callbacks when adding work items" do
-      on_push_callback_called = false
-      subject.on_push{ on_push_callback_called = true }
-      subject.push(Factory.string)
-      assert_true on_push_callback_called
+      on_push_queue     = nil
+      on_push_work_item = nil
+      subject.on_push do |queue, work_item|
+        on_push_queue     = queue
+        on_push_work_item = work_item
+      end
+
+      work_item = Factory.string
+      subject.push(work_item)
+      assert_equal subject,   on_push_queue
+      assert_equal work_item, on_push_work_item
     end
 
     should "be able to pop work items" do
@@ -129,10 +136,25 @@ class DatWorkerPool::DefaultQueue
     should "run on pop callbacks when popping work items" do
       subject.push(Factory.string)
 
-      on_pop_callback_called = false
-      subject.on_pop{ on_pop_callback_called = true }
+      on_pop_queue     = nil
+      on_pop_work_item = nil
+      subject.on_pop do |queue, work_item|
+        on_pop_queue     = queue
+        on_pop_work_item = work_item
+      end
+
+      popped_work_item = subject.pop
+      assert_equal subject,          on_pop_queue
+      assert_equal popped_work_item, on_pop_work_item
+    end
+
+    should "not run on pop callbacks when there isn't a work item" do
+      subject.push(nil)
+
+      on_pop_called = false
+      subject.on_pop{ on_pop_called = true }
       subject.pop
-      assert_true on_pop_callback_called
+      assert_false on_pop_called
     end
 
   end
@@ -140,6 +162,9 @@ class DatWorkerPool::DefaultQueue
   class ThreadTests < StartedTests
     desc "with a thread using it"
     setup do
+      @on_pop_called = false
+      @queue.on_pop{ @on_pop_called = true }
+
       @thread = Thread.new{ Thread.current['popped_value'] = @queue.pop }
     end
     subject{ @thread }
@@ -181,6 +206,11 @@ class DatWorkerPool::DefaultQueue
 
       assert_not subject.alive?
       assert_equal 1, @cond_var_spy.wait_call_count
+    end
+
+    should "not run on pop callbacks when shutdown" do
+      @queue.shutdown
+      assert_false @on_pop_called
     end
 
     should "not pop a work item when shutdown and not empty" do
