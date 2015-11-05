@@ -3,7 +3,7 @@ require 'dat-worker-pool'
 
 class DatWorkerPool
 
-  class Worker
+  class DefaultWorker
 
     attr_accessor :on_work, :on_error_callbacks
     attr_accessor :on_start_callbacks, :on_shutdown_callbacks
