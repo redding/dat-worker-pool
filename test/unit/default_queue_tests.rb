@@ -1,22 +1,55 @@
 require 'assert'
 require 'dat-worker-pool/default_queue'
 
+require 'dat-worker-pool/queue'
+
 class DatWorkerPool::DefaultQueue
 
   class UnitTests < Assert::Context
     desc "DatWorkerPool::DefaultQueue"
     setup do
-      @queue = DatWorkerPool::DefaultQueue.new
+      @queue_class = DatWorkerPool::DefaultQueue
+    end
+    subject{ @queue_class }
+
+    should "be a dat-worker-pool queue" do
+      assert_includes DatWorkerPool::Queue, subject
+    end
+
+  end
+
+  class InitTests < UnitTests
+    desc "when init"
+    setup do
+      @queue = @queue_class.new
     end
     subject{ @queue }
 
-    should have_accessors :on_push_callbacks, :on_pop_callbacks
-    should have_imeths :work_items, :push, :pop, :empty?
-    should have_imeths :start, :shutdown, :shutdown?
+    should have_readers :on_push_callbacks, :on_pop_callbacks
+    should have_imeths :work_items, :empty?
+    should have_imeths :on_push, :on_pop
 
     should "default its callbacks" do
       assert_equal [], subject.on_push_callbacks
       assert_equal [], subject.on_pop_callbacks
+    end
+
+    should "allow adding custom push and pop callbacks" do
+      callback = proc{ Factory.string }
+      subject.on_push(&callback)
+      assert_includes callback, subject.on_push_callbacks
+
+      callback = proc{ Factory.string }
+      subject.on_pop(&callback)
+      assert_includes callback, subject.on_pop_callbacks
+    end
+
+  end
+
+  class StartedTests < InitTests
+    desc "and started"
+    setup do
+      @queue.start
     end
 
     should "allow pushing work items onto the queue with #push" do
@@ -29,11 +62,6 @@ class DatWorkerPool::DefaultQueue
       subject.on_push_callbacks << proc{ on_push_called = true }
       subject.push 'work'
       assert_true on_push_called
-    end
-
-    should "raise an exception if trying to push work when shutdown" do
-      subject.shutdown
-      assert_raises(RuntimeError){ subject.push('work') }
     end
 
     should "pop work items off the queue with #pop" do
@@ -55,12 +83,6 @@ class DatWorkerPool::DefaultQueue
       assert_true on_pop_called
     end
 
-    should "return nothing with pop when the queue has been shutdown" do
-      subject.push 'work1'
-      subject.shutdown
-      assert_nil subject.pop
-    end
-
     should "return whether the queue is empty or not with #empty?" do
       assert subject.empty?
       subject.push 'work'
@@ -69,18 +91,9 @@ class DatWorkerPool::DefaultQueue
       assert subject.empty?
     end
 
-    should "reset its shutdown flag when started" do
-      assert_false subject.shutdown?
-      subject.shutdown
-      assert_true subject.shutdown?
-      subject.start
-      assert_false subject.shutdown?
-    end
-
   end
 
-  class SignallingTests < UnitTests
-    desc "mutex and condition variable behavior"
+  class SignallingTests < StartedTests
     setup do
       @thread = Thread.new do
         Thread.current['work_item'] = @queue.pop || 'got nothing'
