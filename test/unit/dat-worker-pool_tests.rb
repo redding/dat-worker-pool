@@ -2,6 +2,7 @@ require 'assert'
 require 'dat-worker-pool'
 
 require 'system_timer'
+require 'dat-worker-pool/queue'
 
 class DatWorkerPool
 
@@ -22,32 +23,44 @@ class DatWorkerPool
   class InitTests < UnitTests
     desc "when init"
     setup do
-      @worker_pool = @worker_pool_class.new(:do_work_proc => proc{ })
+      @num_workers = Factory.integer(4)
+      @logger      = NullLogger.new
+      @queue       = TestQueue.new
+      @worker_pool = @worker_pool_class.new({
+        :do_work_proc => proc{ },
+        :num_workers  => @num_workers,
+        :logger       => @logger,
+        :queue        => @queue
+      })
     end
     subject{ @worker_pool }
 
-    should have_readers :num_workers, :logger
-    should have_readers :queue
+    should have_readers :num_workers, :logger, :queue
     should have_readers :on_worker_error_callbacks
     should have_readers :on_worker_start_callbacks, :on_worker_shutdown_callbacks
     should have_readers :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
     should have_readers :before_work_callbacks, :after_work_callbacks
-    should have_imeths :add_work, :start, :shutdown
-    should have_imeths :work_items, :waiting
-    should have_imeths :worker_available?
-    should have_imeths :queue_empty?
-    should have_imeths :on_queue_pop_callbacks, :on_queue_push_callbacks
-    should have_imeths :on_queue_pop, :on_queue_push
+    should have_imeths :start, :shutdown, :add_work
+    should have_imeths :waiting, :worker_available?
     should have_imeths :on_worker_error
     should have_imeths :on_worker_start, :on_worker_shutdown
     should have_imeths :on_worker_sleep, :on_worker_wakeup
     should have_imeths :before_work, :after_work
 
-    should "default its attributes" do
-      assert_equal DEFAULT_NUM_WORKERS, subject.num_workers
-      assert_instance_of NullLogger, subject.logger
-      assert_instance_of DatWorkerPool::DefaultQueue, subject.queue
+    should "know its attributes" do
+      assert_equal @num_workers, subject.num_workers
+      assert_equal @logger,      subject.logger
+      assert_equal @queue,       subject.queue
+    end
 
+    should "default its attributes" do
+      worker_pool = @worker_pool_class.new
+      assert_equal DEFAULT_NUM_WORKERS, worker_pool.num_workers
+      assert_instance_of NullLogger, worker_pool.logger
+      assert_instance_of DatWorkerPool::DefaultQueue, worker_pool.queue
+    end
+
+    should "default its worker callbacks" do
       assert_equal [], subject.on_worker_error_callbacks
       assert_equal [], subject.on_worker_start_callbacks
       assert_equal 1, subject.on_worker_shutdown_callbacks.size
@@ -60,44 +73,10 @@ class DatWorkerPool
       assert_equal [], subject.after_work_callbacks
     end
 
-    should "allow customizing it by passing options" do
-      num_workers = Factory.integer
-      logger      = Logger.new(STDOUT)
-      worker_pool = @worker_pool_class.new({
-        :num_workers  => num_workers,
-        :logger       => logger,
-        :do_work_proc => proc{ }
-      })
-      assert_equal num_workers, worker_pool.num_workers
-      assert_equal logger,      worker_pool.logger
-    end
-
-    should "demeter its queue callbacks" do
-      callback = proc{ }
-      subject.on_queue_pop(&callback)
-      assert_equal [callback], subject.on_queue_pop_callbacks
-      callback = proc{ }
-      subject.on_queue_push(&callback)
-      assert_equal [callback], subject.on_queue_push_callbacks
-    end
-
-    # TODO - stub queue once we can pass a queue instance to worker pool
-    should "know if its queue is empty or not" do
-      assert_true subject.queue_empty?
-      subject.queue.start
-      subject.queue.push Factory.string
-      assert_false subject.queue_empty?
-    end
-
-    # TODO - once we pass queue, test shutdown changes on queue
     should "start its queue when its started" do
-      assert_true subject.queue.shutdown?
+      assert_false @queue.running?
       subject.start
-      assert_false subject.queue.shutdown?
-      subject.shutdown
-      assert_true subject.queue.shutdown?
-      subject.start
-      assert_false subject.queue.shutdown?
+      assert_true @queue.running?
     end
 
     # TODO - once we pass worker class
@@ -112,6 +91,25 @@ class DatWorkerPool
           :do_work_proc => proc{ }
         })
       end
+    end
+
+  end
+
+  class StartedTests < InitTests
+    desc "and started"
+    setup do
+      @worker_pool.start
+    end
+
+    should "push work onto its queue using `add_work`" do
+      work_item = Factory.string
+      subject.add_work(work_item)
+      assert_equal [work_item], @queue.pushed_work_items
+    end
+
+    should "not push `nil` work onto its queue using `add_work`" do
+      subject.add_work(nil)
+      assert_equal [], @queue.pushed_work_items
     end
 
   end
@@ -180,11 +178,10 @@ class DatWorkerPool
 
   end
 
-  # TODO - remove once we pass a custom worker class and queue `add_work` can
-  # be tested in the `InitTests` once we can pass a queue; the `process` method
+  # TODO - remove once we pass a custom worker class; the `do_work` method
   # should go away once we can pass a worker class
-  class AddWorkAndProcessItTests < UnitTests
-    desc "add_work and process"
+  class DoWorkTests < UnitTests
+    desc "do_work"
     setup do
       @result = nil
       @worker_pool = @worker_pool_class.new({
@@ -286,6 +283,22 @@ class DatWorkerPool
 
     should have_imeths :debug, :info, :error
 
+  end
+
+  class TestQueue
+    include DatWorkerPool::Queue
+
+    attr_reader :pushed_work_items
+
+    def initialize
+      @pushed_work_items = []
+    end
+
+    private
+
+    def push!(work_item)
+      @pushed_work_items << work_item
+    end
   end
 
   class ForceShutdownSpyWorker < Worker

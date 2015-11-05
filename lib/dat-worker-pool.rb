@@ -3,7 +3,6 @@ require 'system_timer'
 require 'thread'
 
 require 'dat-worker-pool/version'
-require 'dat-worker-pool/default_queue'
 require 'dat-worker-pool/queue'
 require 'dat-worker-pool/worker'
 
@@ -12,8 +11,7 @@ class DatWorkerPool
   DEFAULT_NUM_WORKERS = 1
   MIN_WORKERS         = 1
 
-  attr_reader :num_workers, :logger
-  attr_reader :queue
+  attr_reader :num_workers, :logger, :queue
   attr_reader :on_worker_error_callbacks
   attr_reader :on_worker_start_callbacks, :on_worker_shutdown_callbacks
   attr_reader :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
@@ -29,11 +27,14 @@ class DatWorkerPool
       raise ArgumentError, "number of workers must be at least #{MIN_WORKERS}"
     end
 
-    @queue           = DatWorkerPool::DefaultQueue.new
-    @workers_waiting = WorkersWaiting.new
+    @queue = options[:queue] || begin
+      require 'dat-worker-pool/default_queue'
+      DatWorkerPool::DefaultQueue.new
+    end
 
-    @mutex   = Mutex.new
-    @workers = []
+    @workers_waiting = WorkersWaiting.new
+    @mutex           = Mutex.new
+    @workers         = []
 
     @on_worker_error_callbacks    = []
     @on_worker_start_callbacks    = []
@@ -68,14 +69,6 @@ class DatWorkerPool
     @queue.push work_item
   end
 
-  def work_items
-    @queue.work_items
-  end
-
-  def queue_empty?
-    @queue.empty?
-  end
-
   def waiting
     @workers_waiting.count
   end
@@ -83,12 +76,6 @@ class DatWorkerPool
   def worker_available?
     @workers_waiting.count > 0
   end
-
-  def on_queue_push_callbacks; @queue.on_push_callbacks; end
-  def on_queue_pop_callbacks;  @queue.on_pop_callbacks;  end
-
-  def on_queue_push(&block); @queue.on_push(&block); end
-  def on_queue_pop(&block);  @queue.on_pop(&block);  end
 
   def on_worker_error(&block);    @on_worker_error_callbacks    << block; end
   def on_worker_start(&block);    @on_worker_start_callbacks    << block; end
