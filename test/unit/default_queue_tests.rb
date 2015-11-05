@@ -1,7 +1,9 @@
 require 'assert'
 require 'dat-worker-pool/default_queue'
 
+require 'thread'
 require 'dat-worker-pool/queue'
+require 'test/support/thread_spies'
 
 class DatWorkerPool::DefaultQueue
 
@@ -21,6 +23,12 @@ class DatWorkerPool::DefaultQueue
   class InitTests < UnitTests
     desc "when init"
     setup do
+      @mutex_spy = MutexSpy.new
+      Assert.stub(Mutex, :new){ @mutex_spy }
+
+      @cond_var_spy = ConditionVariableSpy.new
+      Assert.stub(ConditionVariable, :new){ @cond_var_spy }
+
       @queue = @queue_class.new
     end
     subject{ @queue }
@@ -44,6 +52,29 @@ class DatWorkerPool::DefaultQueue
       assert_includes callback, subject.on_pop_callbacks
     end
 
+    should "default its work items" do
+      assert_equal [], subject.work_items
+    end
+
+    should "lock access to its work items" do
+      assert_false @mutex_spy.synchronize_called
+      subject.work_items
+      assert_true @mutex_spy.synchronize_called
+    end
+
+    should "know if its empty or not" do
+      assert_true subject.empty?
+      subject.start
+      subject.push(Factory.string)
+      assert_false subject.empty?
+    end
+
+    should "lock access to checking if its empty" do
+      assert_false @mutex_spy.synchronize_called
+      subject.empty?
+      assert_true @mutex_spy.synchronize_called
+    end
+
   end
 
   class StartedTests < InitTests
@@ -52,70 +83,120 @@ class DatWorkerPool::DefaultQueue
       @queue.start
     end
 
-    should "allow pushing work items onto the queue with #push" do
-      subject.push 'work'
-      assert_equal [ 'work' ], subject.work_items
+    should "broadcast to all threads when shutdown" do
+      assert_false @mutex_spy.synchronize_called
+      assert_false @cond_var_spy.broadcast_called
+      subject.shutdown
+      assert_true @cond_var_spy.broadcast_called
+      assert_true @mutex_spy.synchronize_called
     end
 
-    should "call its on push callback when work is pushed" do
-      on_push_called = false
-      subject.on_push_callbacks << proc{ on_push_called = true }
-      subject.push 'work'
-      assert_true on_push_called
-    end
-
-    should "pop work items off the queue with #pop" do
-      subject.push 'work1'
-      subject.push 'work2'
-
-      assert_equal 2, subject.work_items.size
-      assert_equal 'work1', subject.pop
+    should "be able to add work items" do
+      work_item = Factory.string
+      subject.push(work_item)
       assert_equal 1, subject.work_items.size
-      assert_equal 'work2', subject.pop
-      assert_equal 0, subject.work_items.size
+      assert_equal work_item, subject.work_items.last
+
+      subject.push(work_item)
+      assert_equal 2, subject.work_items.size
+      assert_equal work_item, subject.work_items.last
     end
 
-    should "call its on pop callback when work is popped" do
-      subject.push 'work'
-      on_pop_called = false
-      subject.on_pop_callbacks << proc{ on_pop_called = true }
-      subject.pop
-      assert_true on_pop_called
+    should "signal threads waiting on its lock when adding work items" do
+      assert_false @mutex_spy.synchronize_called
+      assert_false @cond_var_spy.signal_called
+      subject.push(Factory.string)
+      assert_true @cond_var_spy.signal_called
+      assert_true @mutex_spy.synchronize_called
     end
 
-    should "return whether the queue is empty or not with #empty?" do
-      assert subject.empty?
-      subject.push 'work'
-      assert_not subject.empty?
+    should "run on push callbacks when adding work items" do
+      on_push_callback_called = false
+      subject.on_push{ on_push_callback_called = true }
+      subject.push(Factory.string)
+      assert_true on_push_callback_called
+    end
+
+    should "be able to pop work items" do
+      values = (Factory.integer(3) + 1).times.map{ Factory.string }
+      values.each{ |v| subject.push(v) }
+
+      assert_equal values.first, subject.pop
+      exp = values - [values.first]
+      assert_equal exp, subject.work_items
+    end
+
+    should "run on pop callbacks when popping work items" do
+      subject.push(Factory.string)
+
+      on_pop_callback_called = false
+      subject.on_pop{ on_pop_callback_called = true }
       subject.pop
-      assert subject.empty?
+      assert_true on_pop_callback_called
     end
 
   end
 
-  class SignallingTests < StartedTests
+  class ThreadTests < StartedTests
+    desc "with a thread using it"
     setup do
-      @thread = Thread.new do
-        Thread.current['work_item'] = @queue.pop || 'got nothing'
-      end
+      @thread = Thread.new{ Thread.current['popped_value'] = @queue.pop }
+    end
+    subject{ @thread }
+
+    should "sleep the thread if empty when popping work items" do
+      assert_equal 'sleep', subject.status
+      assert_equal @mutex_spy, @cond_var_spy.wait_called_on
     end
 
-    should "have threads wait for a work item to be added when using pop" do
-      assert_equal "sleep", @thread.status
+    should "wakeup the thread (from waiting on pop) when work items are added" do
+      assert_equal 'sleep', subject.status
+
+      value = Factory.string
+      @queue.push(value)
+
+      assert_not subject.alive?
+      assert_equal value, subject['popped_value']
     end
 
-    should "wakeup threads when work is pushed onto the queue" do
-      subject.push 'some work'
-      sleep 0.1
-      assert !@thread.alive?
-      assert_equal 'some work', @thread['work_item']
+    should "re-sleep the thread if woken up while the queue is empty" do
+      assert_equal 'sleep', subject.status
+      assert_equal 1, @cond_var_spy.wait_call_count
+
+      # wakeup the thread (like `push` does) but we don't want to add anything
+      # to the queue, its possible this can happen if another worker never
+      # sleeps and grabs the lock and work item before the thread being woken
+      # up
+      @mutex_spy.synchronize{ @cond_var_spy.signal }
+
+      assert_equal 'sleep', subject.status
+      assert_equal 2, @cond_var_spy.wait_call_count
     end
 
-    should "wakeup thread when the queue is shutdown" do
-      subject.shutdown
-      sleep 0.1
-      assert !@thread.alive?
-      assert_equal 'got nothing', @thread['work_item']
+    should "wakeup the thread (from waiting on pop) when its shutdown" do
+      assert_equal 'sleep', subject.status
+      assert_equal 1, @cond_var_spy.wait_call_count
+
+      @queue.shutdown
+
+      assert_not subject.alive?
+      assert_equal 1, @cond_var_spy.wait_call_count
+    end
+
+    should "not pop a work item when shutdown and not empty" do
+      assert_equal 'sleep', subject.status
+
+      # this is to simulate a specific situation where there is work on the
+      # queue and the queue gets shutdown while a worker is still sleeping (it
+      # hasn't gotten a chance to wakeup and pull work off the queue yet), if
+      # this happens we don't want it to pull work off the queue; to set up this
+      # scenario we can't use `push` because it will wakeup the thread; so this
+      # accesses the array directly and pushes an item on it
+      @queue.instance_variable_get("@work_items") << Factory.string
+      @queue.shutdown
+
+      assert_not subject.alive?
+      assert_nil subject['popped_value']
     end
 
   end
