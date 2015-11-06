@@ -1,17 +1,17 @@
 require 'assert'
-require 'dat-worker-pool/worker'
+require 'dat-worker-pool/default_worker'
 
 require 'dat-worker-pool'
 require 'dat-worker-pool/default_queue'
 
-class DatWorkerPool::Worker
+class DatWorkerPool::DefaultWorker
 
   class UnitTests < Assert::Context
-    desc "DatWorkerPool::Worker"
+    desc "DatWorkerPool::DefaultWorker"
     setup do
       @queue = DatWorkerPool::DefaultQueue.new.tap(&:start)
       @work_done = []
-      @worker = DatWorkerPool::Worker.new(@queue).tap do |w|
+      @worker = DatWorkerPool::DefaultWorker.new(@queue).tap do |w|
         w.on_work = proc{ |worker, work| @work_done << work }
       end
     end
@@ -29,7 +29,7 @@ class DatWorkerPool::Worker
     should have_imeths :start, :shutdown, :join, :raise, :running?
 
     should "default its callbacks" do
-      worker = DatWorkerPool::Worker.new(@queue)
+      worker = DatWorkerPool::DefaultWorker.new(@queue)
       assert_equal [], worker.on_error_callbacks
       assert_equal [], worker.on_start_callbacks
       assert_equal [], worker.on_shutdown_callbacks
@@ -106,7 +106,7 @@ class DatWorkerPool::Worker
       @before_work_called_at   = nil
       @after_work_called_with  = nil
       @after_work_called_at    = nil
-      @worker = DatWorkerPool::Worker.new(@queue).tap do |w|
+      @worker = DatWorkerPool::DefaultWorker.new(@queue).tap do |w|
         w.on_error_callbacks << proc do |*args|
           @on_error_called_with = args
         end

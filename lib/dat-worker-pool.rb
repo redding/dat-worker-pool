@@ -3,8 +3,8 @@ require 'system_timer'
 require 'thread'
 
 require 'dat-worker-pool/version'
+require 'dat-worker-pool/default_worker'
 require 'dat-worker-pool/queue'
-require 'dat-worker-pool/worker'
 
 class DatWorkerPool
 
@@ -128,7 +128,7 @@ class DatWorkerPool
   end
 
   def spawn_worker!
-    Worker.new(@queue).tap do |w|
+    DefaultWorker.new(@queue).tap do |w|
       w.on_work = proc{ |worker, work_item| do_work(work_item) }
 
       w.on_error_callbacks    = @on_worker_error_callbacks

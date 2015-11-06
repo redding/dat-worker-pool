@@ -237,7 +237,7 @@ class DatWorkerPool
         ForceShutdownSpyWorker.new(@worker_pool.queue)
       end
       stub_workers = @workers.dup
-      Assert.stub(Worker, :new){ stub_workers.pop }
+      Assert.stub(DefaultWorker, :new){ stub_workers.pop }
 
       @worker_pool.start
     end
@@ -259,7 +259,7 @@ class DatWorkerPool
       @workers = @num_workers.times.map do
         ForceShutdownJoinErrorWorker.new(@worker_pool.queue)
       end
-      Assert.stub(Worker, :new){ @workers.pop }
+      Assert.stub(DefaultWorker, :new){ @workers.pop }
 
       @worker_pool.start
     end
@@ -301,7 +301,7 @@ class DatWorkerPool
     end
   end
 
-  class ForceShutdownSpyWorker < Worker
+  class ForceShutdownSpyWorker < DefaultWorker
     attr_reader :raised_error, :joined
 
     def start; end
