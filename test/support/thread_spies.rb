@@ -1,7 +1,7 @@
 require 'thread'
 
 class MutexSpy < Mutex
-  attr_reader :synchronize_called
+  attr_accessor :synchronize_called
 
   def initialize
     @synchronize_called = false

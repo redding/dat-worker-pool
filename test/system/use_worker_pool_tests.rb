@@ -82,6 +82,76 @@ class DatWorkerPool
 
   end
 
+  class WorkerCallbackTests < SystemTests
+    setup do
+      @error_called       = false
+      @start_called       = false
+      @shutdown_called    = false
+      @sleep_called       = false
+      @wakeup_called      = false
+      @before_work_called = false
+      @after_work_called  = false
+
+      @worker_pool = DatWorkerPool.new({
+        :do_work_proc => proc{ |work| raise work if work == 'error' }
+      })
+
+      @worker_pool.on_worker_error{ @error_called = true }
+      @worker_pool.on_worker_start{ @start_called = true }
+      @worker_pool.on_worker_shutdown{ @shutdown_called = true }
+      @worker_pool.on_worker_sleep{ @sleep_called = true }
+      @worker_pool.on_worker_wakeup{ @wakeup_called = true }
+      @worker_pool.before_work{ @before_work_called = true }
+      @worker_pool.after_work{ @after_work_called = true }
+    end
+    teardown do
+      # TODO - remove once a worker class can be passed
+      DefaultWorker.on_start_callbacks.clear
+      DefaultWorker.on_shutdown_callbacks.clear
+      DefaultWorker.on_sleep_callbacks.clear
+      DefaultWorker.on_wakeup_callbacks.clear
+      DefaultWorker.on_error_callbacks.clear
+      DefaultWorker.before_work_callbacks.clear
+      DefaultWorker.after_work_callbacks.clear
+    end
+    subject{ @worker_pool }
+
+    should "call the worker callbacks as workers wait or wakeup" do
+      assert_false @start_called
+      assert_false @sleep_called
+      subject.start
+      assert_true @start_called
+      assert_true @sleep_called
+
+      @sleep_called = false
+      assert_false @wakeup_called
+      assert_false @before_work_called
+      assert_false @after_work_called
+      subject.add_work 'work'
+      assert_true @wakeup_called
+      assert_true @before_work_called
+      assert_true @after_work_called
+      assert_true @sleep_called
+
+      @before_work_called = false
+      @after_work_called  = false
+      assert_false @before_work_called
+      assert_false @error_called
+      assert_false @after_work_called
+      subject.add_work 'error'
+      assert_true @before_work_called
+      assert_true @error_called
+      assert_false @after_work_called
+
+      @wakeup_called = false
+      assert_false @shutdown_called
+      subject.shutdown
+      assert_true @wakeup_called
+      assert_true @shutdown_called
+    end
+
+  end
+
   class ShutdownSystemTests < SystemTests
     desc "shutdown"
     setup do
