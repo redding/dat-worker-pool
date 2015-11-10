@@ -34,6 +34,9 @@ class DatWorkerPool::Runner
       }
       @runner = @runner_class.new(@options)
     end
+    teardown do
+      subject.shutdown(0)
+    end
     subject{ @runner }
 
     should have_readers :num_workers, :worker_class, :worker_params
@@ -41,7 +44,7 @@ class DatWorkerPool::Runner
     should have_imeths :start, :shutdown
     should have_imeths :workers_waiting_count
     should have_imeths :increment_worker_waiting, :decrement_worker_waiting
-    should have_imeths :despawn_worker
+    should have_imeths :add_worker, :remove_worker
 
     should "know its attributes" do
       assert_equal @num_workers,   subject.num_workers
@@ -68,14 +71,22 @@ class DatWorkerPool::Runner
       assert_true @queue.running?
     end
 
-    should "spawn workers when its started" do
+    should "build workers when its started" do
+      passed_runner = nil
+      passed_queue  = nil
+      workers = @num_workers.times.map{ @worker_class.new(@runner, @queue) }
+      Assert.stub(@worker_class, :new) do |runner, queue|
+        passed_runner = runner
+        passed_queue  = queue
+        workers.pop
+      end
+
       subject.start
-      assert_equal @num_workers, subject.workers.size
+
+      assert_equal subject, passed_runner
+      assert_equal @queue,  passed_queue
       subject.workers.each do |worker|
-        assert_instance_of @worker_class, worker
-        assert_equal subject, worker.runner
-        assert_equal @queue,  worker.queue
-        assert_true worker.running?
+        assert_true worker.dwp_running?
       end
     end
 
@@ -94,11 +105,22 @@ class DatWorkerPool::Runner
       @mutex_spy.synchronize_called = false # reset so we can test it below
     end
 
-    should "remove a worker from its workers using `despawn_worker`" do
+    should "add a worker to its workers using `add_worker`" do
+      worker = @worker_class.new(@runner, @queue)
+
+      assert_false @mutex_spy.synchronize_called
+      subject.add_worker(worker)
+      assert_true @mutex_spy.synchronize_called
+      assert_includes worker, subject.workers
+
+      subject.workers.delete(worker)
+    end
+
+    should "remove a worker from its workers using `remove_worker`" do
       worker = subject.workers.choice
 
       assert_false @mutex_spy.synchronize_called
-      subject.despawn_worker(worker)
+      subject.remove_worker(worker)
       assert_true @mutex_spy.synchronize_called
       assert_not_includes worker, subject.workers
     end
@@ -138,11 +160,11 @@ class DatWorkerPool::Runner
 
     should "shutdown all of its workers" do
       subject.workers.each do |worker|
-        assert_false worker.shutdown?
+        assert_false worker.dwp_shutdown?
       end
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
       subject.workers.each do |worker|
-        assert_true worker.shutdown?
+        assert_true worker.dwp_shutdown?
       end
     end
 
@@ -215,7 +237,6 @@ class DatWorkerPool::Runner
   class WorkerSpy
     include DatWorkerPool::Worker
 
-    attr_reader :runner, :queue
     attr_reader :join_called
 
     def initialize(*args)
@@ -223,14 +244,14 @@ class DatWorkerPool::Runner
       @join_called = false
     end
 
-    def join(*args); @join_called = true; end
+    def dwp_join(*args); @join_called = true; end
   end
 
   class ForceShutdownSpyWorker < WorkerSpy
     attr_reader :raised_error
 
-    def start; end
-    def raise(error); @raised_error = error; end
+    def dwp_start; end
+    def dwp_raise(error); @raised_error = error; end
   end
 
   # this creates a rare scenario where as we are joining a worker, it throws
@@ -240,7 +261,7 @@ class DatWorkerPool::Runner
   # `work_loop`, if this happens, we will get the error raised when we `join`
   # the worker thread
   class ForceShutdownJoinErrorWorker < ForceShutdownSpyWorker
-    def join; raise Factory.exception; end
+    def dwp_join; raise Factory.exception; end
   end
 
 end

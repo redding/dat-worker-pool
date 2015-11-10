@@ -23,7 +23,7 @@ class DatWorkerPool
 
     def start
       @queue.start
-      @num_workers.times{ spawn_worker }
+      @num_workers.times{ build_worker }
     end
 
     # the workers should be told to shutdown before the queue because the queue
@@ -36,9 +36,9 @@ class DatWorkerPool
     def shutdown(timeout = nil)
       begin
         OptionalTimeout.new(timeout) do
-          @workers.each(&:shutdown)
+          @workers.each(&:dwp_shutdown)
           @queue.shutdown
-          @workers.first.join until @workers.empty?
+          @workers.first.dwp_join until @workers.empty?
         end
       rescue TimeoutError
         force_shutdown(timeout, caller)
@@ -57,19 +57,18 @@ class DatWorkerPool
       @workers_waiting.decrement
     end
 
-    def despawn_worker(worker)
+    def add_worker(worker)
+      @mutex.synchronize{ @workers.push(worker) }
+    end
+
+    def remove_worker(worker)
       @mutex.synchronize{ @workers.delete(worker) }
     end
 
     private
 
-    def spawn_worker
-      @mutex.synchronize do
-        @worker_class.new(self, @queue).tap do |w|
-          @workers << w
-          w.start
-        end
-      end
+    def build_worker
+      @worker_class.new(self, @queue).tap(&:dwp_start)
     end
 
     # use an until loop instead of each to join all the workers, while we are
@@ -84,8 +83,8 @@ class DatWorkerPool
       error.set_backtrace(backtrace)
       until @workers.empty?
         worker = @workers.first
-        worker.raise(error)
-        worker.join rescue false
+        worker.dwp_raise(error)
+        worker.dwp_join rescue false
         @workers.delete(worker)
       end
     end

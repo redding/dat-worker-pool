@@ -95,17 +95,16 @@ class DatWorkerPool
       @worker_class = Class.new do
         include DatWorkerPool::Worker
 
-        # TODO - change once these are instance evald
-        on_start{ |w| w.params[:callbacks_called][:on_start] = true }
-        on_shutdown{ |w| w.params[:callbacks_called][:on_shutdown] = true }
+        on_start{ params[:callbacks_called][:on_start] = true }
+        on_shutdown{ params[:callbacks_called][:on_shutdown] = true }
 
-        on_sleep{ |w| w.params[:callbacks_called][:on_sleep] = true }
-        on_wakeup{ |w| w.params[:callbacks_called][:on_wakeup] = true }
+        on_sleep{ params[:callbacks_called][:on_sleep] = true }
+        on_wakeup{ params[:callbacks_called][:on_wakeup] = true }
 
-        on_error{ |w, e, wi| w.params[:callbacks_called][:on_error] = true }
+        on_error{ |e, wi| params[:callbacks_called][:on_error] = true }
 
-        before_work{ |w, wi| w.params[:callbacks_called][:before_work] = true }
-        after_work{ |w, wi| w.params[:callbacks_called][:after_work] = true }
+        before_work{ |wi| params[:callbacks_called][:before_work] = true }
+        after_work{ |wi| params[:callbacks_called][:after_work] = true }
 
         def work!(work_item); raise work_item if work_item == 'error'; end
       end
