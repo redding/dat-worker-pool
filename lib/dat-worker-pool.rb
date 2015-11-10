@@ -1,67 +1,47 @@
 require 'logger'
-require 'system_timer'
-require 'thread'
 
 require 'dat-worker-pool/version'
 require 'dat-worker-pool/default_worker'
 require 'dat-worker-pool/queue'
+require 'dat-worker-pool/runner'
 
 class DatWorkerPool
 
   DEFAULT_NUM_WORKERS = 1
   MIN_WORKERS         = 1
 
-  attr_reader :num_workers, :logger, :queue
-  attr_reader :on_worker_error_callbacks
-  attr_reader :on_worker_start_callbacks, :on_worker_shutdown_callbacks
-  attr_reader :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
-  attr_reader :before_work_callbacks, :after_work_callbacks
+  attr_reader :logger, :queue
 
   def initialize(options = nil)
     options ||= {}
-    @do_work_proc = options[:do_work_proc]
-    @num_workers  = (options[:num_workers] || DEFAULT_NUM_WORKERS).to_i
-    @logger       = options[:logger] || NullLogger.new
-
-    if @num_workers < MIN_WORKERS
+    num_workers = (options[:num_workers] || DEFAULT_NUM_WORKERS).to_i
+    if num_workers < MIN_WORKERS
       raise ArgumentError, "number of workers must be at least #{MIN_WORKERS}"
     end
+
+    @logger = options[:logger] || NullLogger.new
 
     @queue = options[:queue] || begin
       require 'dat-worker-pool/default_queue'
       DatWorkerPool::DefaultQueue.new
     end
 
-    @workers_waiting = WorkersWaiting.new
-    @mutex           = Mutex.new
-    @workers         = []
-
-    @on_worker_error_callbacks    = []
-    @on_worker_start_callbacks    = []
-    @on_worker_shutdown_callbacks = [proc{ |worker| despawn_worker(worker) }]
-    @on_worker_sleep_callbacks    = [proc{ @workers_waiting.increment }]
-    @on_worker_wakeup_callbacks   = [proc{ @workers_waiting.decrement }]
-    @before_work_callbacks        = []
-    @after_work_callbacks         = []
-
-    @started = false
+    # TODO - don't save off once a worker class can be passed in
+    @worker_class = DefaultWorker
+    @runner = DatWorkerPool::Runner.new({
+      :num_workers  => num_workers,
+      :queue        => @queue,
+      :worker_class => @worker_class,
+      :do_work_proc => options[:do_work_proc]
+    })
   end
 
   def start
-    @started = true
-    @queue.start
-    @num_workers.times{ spawn_worker }
+    @runner.start
   end
 
-  # * All work on the queue is left on the queue. It's up to the controlling
-  #   system to decide how it should handle this.
   def shutdown(timeout = nil)
-    @started = false
-    begin
-      OptionalTimeout.new(timeout){ graceful_shutdown }
-    rescue TimeoutError
-      force_shutdown(timeout, caller)
-    end
+    @runner.shutdown(timeout)
   end
 
   def add_work(work_item)
@@ -69,116 +49,35 @@ class DatWorkerPool
     @queue.push work_item
   end
 
+  def num_workers
+    @runner.num_workers
+  end
+
   def waiting
-    @workers_waiting.count
+    @runner.workers_waiting_count
   end
 
   def worker_available?
-    @workers_waiting.count > 0
+    self.waiting > 0
   end
 
-  def on_worker_error(&block);    @on_worker_error_callbacks    << block; end
-  def on_worker_start(&block);    @on_worker_start_callbacks    << block; end
-  def on_worker_shutdown(&block); @on_worker_shutdown_callbacks << block; end
-  def on_worker_sleep(&block);    @on_worker_sleep_callbacks    << block; end
-  def on_worker_wakeup(&block);   @on_worker_wakeup_callbacks   << block; end
+  # TODO - remove once a worker class can be passed in
+  def on_worker_start_callbacks;    @worker_class.on_start_callbacks;    end
+  def on_worker_shutdown_callbacks; @worker_class.on_shutdown_callbacks; end
+  def on_worker_sleep_callbacks;    @worker_class.on_sleep_callbacks;    end
+  def on_worker_wakeup_callbacks;   @worker_class.on_wakeup_callbacks;   end
+  def on_worker_error_callbacks;    @worker_class.on_error_callbacks;    end
+  def before_work_callbacks;        @worker_class.before_work_callbacks; end
+  def after_work_callbacks;         @worker_class.after_work_callbacks;  end
 
-  def before_work(&block); @before_work_callbacks << block; end
-  def after_work(&block);  @after_work_callbacks  << block; end
-
-  private
-
-  def do_work(work_item)
-    @do_work_proc.call(work_item)
-  end
-
-  # * Always shutdown workers before the queue. `@queue.shutdown` wakes up the
-  #   workers. If you haven't told them to shutdown before they wakeup then they
-  #   won't start their shutdown when they are woken up.
-  # * Use `@workers.first.join until @workers.empty?` instead of `each` to join
-  #   all the workers. While we are joining a worker a separate worker can
-  #   shutdown and remove itself from the `@workers` array.
-  def graceful_shutdown
-    @workers.each(&:shutdown)
-    @queue.shutdown
-    @workers.first.join until @workers.empty?
-  end
-
-  # * Use `@workers.first until @workers.empty?` pattern instead of `each` to
-  #   raise and join all the workers. While we are raising and joining a worker
-  #   a separate worker can shutdown and remove itself from the `@workers`
-  #   array.
-  # * `rescue false` when joining the workers. Ruby will raise any exceptions
-  #   that aren't handled by a thread when its joined. This ensures if the hard
-  #   shutdown is raised and not rescued (for example, in the workers ensure),
-  #   then it won't cause the forced shutdown to end prematurely.
-  def force_shutdown(timeout, backtrace)
-    error = ShutdownError.new "Timed out shutting down (#{timeout} seconds)."
-    error.set_backtrace(backtrace)
-    until @workers.empty?
-      worker = @workers.first
-      worker.raise(error)
-      worker.join rescue false
-      @workers.delete(worker)
-    end
-  end
-
-  def spawn_worker
-    @mutex.synchronize{ spawn_worker! }
-  end
-
-  def spawn_worker!
-    DefaultWorker.new(@queue).tap do |w|
-      w.on_work = proc{ |worker, work_item| do_work(work_item) }
-
-      w.on_error_callbacks    = @on_worker_error_callbacks
-      w.on_start_callbacks    = @on_worker_start_callbacks
-      w.on_shutdown_callbacks = @on_worker_shutdown_callbacks
-      w.on_sleep_callbacks    = @on_worker_sleep_callbacks
-      w.on_wakeup_callbacks   = @on_worker_wakeup_callbacks
-      w.before_work_callbacks = @before_work_callbacks
-      w.after_work_callbacks  = @after_work_callbacks
-
-      @workers << w
-
-      w.start
-    end
-  end
-
-  def despawn_worker(worker)
-    @mutex.synchronize{ despawn_worker!(worker) }
-  end
-
-  def despawn_worker!(worker)
-    @workers.delete worker
-  end
-
-  class WorkersWaiting
-    attr_reader :count
-
-    def initialize
-      @mutex = Mutex.new
-      @count = 0
-    end
-
-    def increment
-      @mutex.synchronize{ @count += 1 }
-    end
-
-    def decrement
-      @mutex.synchronize{ @count -= 1 }
-    end
-  end
-
-  module OptionalTimeout
-    def self.new(seconds, &block)
-      if seconds
-        SystemTimer.timeout(seconds, TimeoutError, &block)
-      else
-        block.call
-      end
-    end
-  end
+  # TODO - remove once a worker class can be passed in
+  def on_worker_start(&block);    @worker_class.on_start(&block);    end
+  def on_worker_shutdown(&block); @worker_class.on_shutdown(&block); end
+  def on_worker_sleep(&block);    @worker_class.on_sleep(&block);    end
+  def on_worker_wakeup(&block);   @worker_class.on_wakeup(&block);   end
+  def on_worker_error(&block);    @worker_class.on_error(&block);    end
+  def before_work(&block);        @worker_class.before_work(&block); end
+  def after_work(&block);         @worker_class.after_work(&block);  end
 
   class NullLogger
     ::Logger::Severity.constants.each do |name|
@@ -188,9 +87,9 @@ class DatWorkerPool
 
   TimeoutError = Class.new(RuntimeError)
 
-  # * This error should never be "swallowed". If it is caught be sure to
-  #   re-raise it so the workers shutdown. Otherwise workers will get killed
-  #   (`Thread#kill`) by ruby which causes lots of issues.
+  # this error should never be "swallowed", if it is caught be sure to re-raise
+  # it so the workers shutdown; otherwise workers will get killed
+  # (`Thread#kill`) by ruby which can cause a problems
   ShutdownError = Class.new(Interrupt)
 
 end

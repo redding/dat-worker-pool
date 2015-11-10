@@ -1,25 +1,18 @@
 require 'thread'
 require 'dat-worker-pool'
+require 'dat-worker-pool/worker'
 
 class DatWorkerPool
 
   class DefaultWorker
+    include DatWorkerPool::Worker
 
-    attr_accessor :on_work, :on_error_callbacks
-    attr_accessor :on_start_callbacks, :on_shutdown_callbacks
-    attr_accessor :on_sleep_callbacks, :on_wakeup_callbacks
-    attr_accessor :before_work_callbacks, :after_work_callbacks
+    attr_accessor :on_work
 
-    def initialize(queue)
-      @queue = queue
-      @on_work = proc{ |worker, work_item| }
-      @on_error_callbacks    = []
-      @on_start_callbacks    = []
-      @on_shutdown_callbacks = []
-      @on_sleep_callbacks    = []
-      @on_wakeup_callbacks   = []
-      @before_work_callbacks = []
-      @after_work_callbacks  = []
+    def initialize(runner, queue)
+      @runner  = runner
+      @queue   = queue
+      @on_work = proc{ |work_item| }
 
       @shutdown = false
       @thread   = nil
@@ -52,14 +45,15 @@ class DatWorkerPool
     #   If the `ShutdownError` isn't rescued, it will be raised when the worker
     #   is joined.
     def work_loop
-      @on_start_callbacks.each{ |p| p.call(self) }
+      run_callback 'on_start'
       loop do
         break if @shutdown
         fetch_and_do_work
       end
     rescue ShutdownError
     ensure
-      @on_shutdown_callbacks.each{ |p| p.call(self) }
+      run_callback 'on_shutdown'
+      @runner.despawn_worker(self)
       @thread = nil
     end
 
@@ -67,9 +61,11 @@ class DatWorkerPool
     #   callbacks. This ensures it causes the work loop to exit (see
     #   `work_loop`).
     def fetch_and_do_work
-      @on_sleep_callbacks.each{ |p| p.call(self) }
+      @runner.increment_worker_waiting
+      run_callback 'on_sleep'
       work_item = @queue.pop
-      @on_wakeup_callbacks.each{ |p| p.call(self) }
+      run_callback 'on_wakeup'
+      @runner.decrement_worker_waiting
       do_work(work_item) if work_item
     rescue ShutdownError => exception
       handle_exception(exception, work_item)
@@ -79,13 +75,13 @@ class DatWorkerPool
     end
 
     def do_work(work_item)
-      @before_work_callbacks.each{ |p| p.call(self, work_item) }
-      @on_work.call(self, work_item)
-      @after_work_callbacks.each{ |p| p.call(self, work_item) }
+      run_callback 'before_work', work_item
+      @on_work.call(work_item)
+      run_callback 'after_work', work_item
     end
 
     def handle_exception(exception, work_item = nil)
-      @on_error_callbacks.each{ |p| p.call(self, exception, work_item) }
+      run_callback 'on_error', exception, work_item
     end
 
   end

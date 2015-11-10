@@ -3,6 +3,7 @@ require 'dat-worker-pool'
 
 require 'system_timer'
 require 'dat-worker-pool/queue'
+require 'dat-worker-pool/runner'
 
 class DatWorkerPool
 
@@ -20,68 +21,102 @@ class DatWorkerPool
 
   end
 
-  class InitTests < UnitTests
+  class InitSetupTests < UnitTests
     desc "when init"
     setup do
       @num_workers = Factory.integer(4)
       @logger      = NullLogger.new
       @queue       = TestQueue.new
-      @worker_pool = @worker_pool_class.new({
+
+      @runner_spy = RunnerSpy.new
+      Assert.stub(DatWorkerPool::Runner, :new) do |args|
+        @runner_spy.args = args
+        @runner_spy
+      end
+
+      @options = {
         :do_work_proc => proc{ },
         :num_workers  => @num_workers,
         :logger       => @logger,
         :queue        => @queue
-      })
+      }
     end
     subject{ @worker_pool }
 
-    should have_readers :num_workers, :logger, :queue
-    should have_readers :on_worker_error_callbacks
-    should have_readers :on_worker_start_callbacks, :on_worker_shutdown_callbacks
-    should have_readers :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
-    should have_readers :before_work_callbacks, :after_work_callbacks
+  end
+
+  class InitTests < InitSetupTests
+    desc "when init"
+    setup do
+      @worker_pool = @worker_pool_class.new(@options)
+    end
+    teardown do
+      # TODO - remove once a worker class can be passed
+      DefaultWorker.on_start_callbacks.clear
+      DefaultWorker.on_shutdown_callbacks.clear
+      DefaultWorker.on_sleep_callbacks.clear
+      DefaultWorker.on_wakeup_callbacks.clear
+      DefaultWorker.on_error_callbacks.clear
+      DefaultWorker.before_work_callbacks.clear
+      DefaultWorker.after_work_callbacks.clear
+    end
+    subject{ @worker_pool }
+
+    should have_readers :logger, :queue
     should have_imeths :start, :shutdown, :add_work
-    should have_imeths :waiting, :worker_available?
-    should have_imeths :on_worker_error
+    should have_imeths :num_workers, :waiting, :worker_available?
+    should have_imeths :on_worker_start_callbacks, :on_worker_shutdown_callbacks
+    should have_imeths :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
+    should have_imeths :on_worker_error_callbacks
+    should have_imeths :before_work_callbacks, :after_work_callbacks
     should have_imeths :on_worker_start, :on_worker_shutdown
     should have_imeths :on_worker_sleep, :on_worker_wakeup
+    should have_imeths :on_worker_error
     should have_imeths :before_work, :after_work
 
     should "know its attributes" do
-      assert_equal @num_workers, subject.num_workers
-      assert_equal @logger,      subject.logger
-      assert_equal @queue,       subject.queue
+      assert_equal @logger, subject.logger
+      assert_equal @queue,  subject.queue
+    end
+
+    should "build a runner" do
+      exp = {
+        :num_workers  => @num_workers,
+        :queue        => @queue,
+        :worker_class => DefaultWorker,
+        :do_work_proc => @options[:do_work_proc]
+      }
+      assert_equal exp, @runner_spy.args
     end
 
     should "default its attributes" do
       worker_pool = @worker_pool_class.new
-      assert_equal DEFAULT_NUM_WORKERS, worker_pool.num_workers
       assert_instance_of NullLogger, worker_pool.logger
       assert_instance_of DatWorkerPool::DefaultQueue, worker_pool.queue
+
+      assert_equal DEFAULT_NUM_WORKERS, @runner_spy.args[:num_workers]
     end
 
-    should "default its worker callbacks" do
-      assert_equal [], subject.on_worker_error_callbacks
-      assert_equal [], subject.on_worker_start_callbacks
-      assert_equal 1, subject.on_worker_shutdown_callbacks.size
-      assert_instance_of Proc, subject.on_worker_shutdown_callbacks.first
-      assert_equal 1, subject.on_worker_sleep_callbacks.size
-      assert_instance_of Proc, subject.on_worker_sleep_callbacks.first
-      assert_equal 1, subject.on_worker_wakeup_callbacks.size
-      assert_instance_of Proc, subject.on_worker_wakeup_callbacks.first
-      assert_equal [], subject.before_work_callbacks
-      assert_equal [], subject.after_work_callbacks
-    end
-
-    should "start its queue when its started" do
-      assert_false @queue.running?
+    should "start its runner when its started" do
+      assert_false @runner_spy.start_called
       subject.start
-      assert_true @queue.running?
+      assert_true @runner_spy.start_called
     end
 
-    # TODO - once we pass worker class
-    should "spawn workers when its started" do
-      skip
+    should "shutdown its runner when its shutdown" do
+      assert_false @runner_spy.shutdown_called
+      subject.shutdown
+      assert_true @runner_spy.shutdown_called
+      assert_nil @runner_spy.shutdown_timeout
+
+      timeout = Factory.integer
+      subject.shutdown(timeout)
+      assert_equal timeout, @runner_spy.shutdown_timeout
+    end
+
+    should "demeter its runner" do
+      assert_equal @runner_spy.num_workers,           subject.num_workers
+      assert_equal @runner_spy.workers_waiting_count, subject.waiting
     end
 
     should "raise an argument error if given an invalid number of workers" do
@@ -91,6 +126,46 @@ class DatWorkerPool
           :do_work_proc => proc{ }
         })
       end
+    end
+
+    # TODO - remove once a worker class can be passed
+    should "demeter its worker callbacks" do
+      callback = proc{ Factory.string }
+
+      subject.on_worker_start(&callback)
+      assert_equal callback, DefaultWorker.on_start_callbacks.last
+      exp = DefaultWorker.on_start_callbacks
+      assert_equal exp, subject.on_worker_start_callbacks
+
+      subject.on_worker_shutdown(&callback)
+      assert_equal callback, DefaultWorker.on_shutdown_callbacks.last
+      exp = DefaultWorker.on_shutdown_callbacks
+      assert_equal exp, subject.on_worker_shutdown_callbacks
+
+      subject.on_worker_sleep(&callback)
+      assert_equal callback, DefaultWorker.on_sleep_callbacks.last
+      exp = DefaultWorker.on_sleep_callbacks
+      assert_equal exp, subject.on_worker_sleep_callbacks
+
+      subject.on_worker_wakeup(&callback)
+      assert_equal callback, DefaultWorker.on_wakeup_callbacks.last
+      exp = DefaultWorker.on_wakeup_callbacks
+      assert_equal exp, subject.on_worker_wakeup_callbacks
+
+      subject.on_worker_error(&callback)
+      assert_equal callback, DefaultWorker.on_error_callbacks.last
+      exp = DefaultWorker.on_error_callbacks
+      assert_equal exp, subject.on_worker_error_callbacks
+
+      subject.before_work(&callback)
+      assert_equal callback, DefaultWorker.before_work_callbacks.last
+      exp = DefaultWorker.before_work_callbacks
+      assert_equal exp, subject.before_work_callbacks
+
+      subject.after_work(&callback)
+      assert_equal callback, DefaultWorker.after_work_callbacks.last
+      exp = DefaultWorker.after_work_callbacks
+      assert_equal exp, subject.after_work_callbacks
     end
 
   end
@@ -110,166 +185,6 @@ class DatWorkerPool
     should "not push `nil` work onto its queue using `add_work`" do
       subject.add_work(nil)
       assert_equal [], @queue.pushed_work_items
-    end
-
-  end
-
-  # TODO - change once a custom worker class can be provided, these probably go
-  # away
-  class WorkerCallbackTests < UnitTests
-    desc "worker callbacks"
-    setup do
-      @error_called       = false
-      @start_called       = false
-      @shutdown_called    = false
-      @sleep_called       = false
-      @wakeup_called      = false
-      @before_work_called = false
-      @after_work_called  = false
-
-      @worker_pool = @worker_pool_class.new({
-        :do_work_proc => proc do |work|
-          raise work if work == 'error'
-        end
-      })
-      @worker_pool.on_worker_error{ @error_called = true }
-      @worker_pool.on_worker_start{ @start_called = true }
-      @worker_pool.on_worker_shutdown{ @shutdown_called = true }
-      @worker_pool.on_worker_sleep{ @sleep_called = true }
-      @worker_pool.on_worker_wakeup{ @wakeup_called = true }
-      @worker_pool.before_work{ @before_work_called = true }
-      @worker_pool.after_work{ @after_work_called = true }
-    end
-    subject{ @worker_pool }
-
-    should "call the worker callbacks as workers wait or wakeup" do
-      assert_false @start_called
-      assert_false @sleep_called
-      subject.start
-      assert_true @start_called
-      assert_true @sleep_called
-
-      @sleep_called = false
-      assert_false @wakeup_called
-      assert_false @before_work_called
-      assert_false @after_work_called
-      subject.add_work 'work'
-      assert_true @wakeup_called
-      assert_true @before_work_called
-      assert_true @after_work_called
-      assert_true @sleep_called
-
-      @before_work_called = false
-      @after_work_called  = false
-      assert_false @before_work_called
-      assert_false @error_called
-      assert_false @after_work_called
-      subject.add_work 'error'
-      assert_true @before_work_called
-      assert_true @error_called
-      assert_false @after_work_called
-
-      @wakeup_called = false
-      assert_false @shutdown_called
-      subject.shutdown
-      assert_true @wakeup_called
-      assert_true @shutdown_called
-    end
-
-  end
-
-  # TODO - remove once we pass a custom worker class; the `do_work` method
-  # should go away once we can pass a worker class
-  class DoWorkTests < UnitTests
-    desc "do_work"
-    setup do
-      @result = nil
-      @worker_pool = @worker_pool_class.new({
-        :do_work_proc => proc{ |work| @result = (2 / work) }
-      })
-      @worker_pool.start
-    end
-    subject{ @worker_pool }
-
-    should "add the work and processed it by calling the passed block" do
-      subject.add_work 2
-      sleep 0.1 # ensure worker thread get's a chance to run
-      assert_equal 1, @result
-    end
-
-    # TODO - move to worker tests ? or remove if we already have it
-    should "swallow exceptions, so workers don't end unexpectedly" do
-      subject.add_work 0
-      worker = subject.instance_variable_get("@workers").first
-      sleep 0.1
-
-      assert_equal 1, subject.waiting
-      assert worker.instance_variable_get("@thread").alive?
-    end
-
-  end
-
-  # TODO - once we can pass a custom worker class
-  class ShutdownTests < UnitTests
-
-  end
-
-  class ForceShutdownSetupTests < UnitTests
-    desc "forced shutdown"
-    setup do
-      # this makes the worker pool force shutdown, by raising timeout error we
-      # are saying the graceful shutdown timed out
-      Assert.stub(OptionalTimeout, :new){ raise TimeoutError }
-
-      @num_workers = Factory.integer(4)
-      @worker_pool = DatWorkerPool.new({
-        :num_workers  => @num_workers,
-        :do_work_proc => proc{ }
-      })
-    end
-    subject{ @worker_pool }
-
-  end
-
-  class ForcedShutdownTests < ForceShutdownSetupTests
-    setup do
-      @workers = @num_workers.times.map do
-        ForceShutdownSpyWorker.new(@worker_pool.queue)
-      end
-      stub_workers = @workers.dup
-      Assert.stub(DefaultWorker, :new){ stub_workers.pop }
-
-      @worker_pool.start
-    end
-
-    should "force workers to shutdown by raising an error in their thread" do
-      subject.shutdown(Factory.integer)
-
-      @workers.each do |worker|
-        assert_instance_of ShutdownError, worker.raised_error
-        assert_true worker.joined
-      end
-    end
-
-  end
-
-  class ForcedShutdownWithErrorsWhileJoiningTests < ForceShutdownSetupTests
-    desc "forced shutdown with errors while joining worker threads"
-    setup do
-      @workers = @num_workers.times.map do
-        ForceShutdownJoinErrorWorker.new(@worker_pool.queue)
-      end
-      Assert.stub(DefaultWorker, :new){ @workers.pop }
-
-      @worker_pool.start
-    end
-
-    should "not raise any errors and continue shutting down" do
-      # if this is broken its possible it can create an infinite loop, so we
-      # time it out and let it throw an exception
-      SystemTimer.timeout(1) do
-        assert_nothing_raised{ subject.shutdown(Factory.integer) }
-      end
     end
 
   end
@@ -301,22 +216,27 @@ class DatWorkerPool
     end
   end
 
-  class ForceShutdownSpyWorker < DefaultWorker
-    attr_reader :raised_error, :joined
+  class RunnerSpy < DatWorkerPool::Runner
+    attr_accessor :args
+    attr_reader :start_called, :shutdown_timeout, :shutdown_called
 
-    def start; end
-    def raise(error); @raised_error = error; end
-    def join; @joined = true; end
-  end
+    def initialize
+      super({})
+      @start_called     = false
+      @shutdown_timeout = nil
+      @shutdown_called  = false
+    end
 
-  # this creates a rare scenario where as we are joining a worker, it throws
-  # an error; this can happen when force shutting down a worker; we raise an
-  # error in the worker thread to force it to shut down, the error can be raised
-  # at any point in the worker thread, including its ensure block in its
-  # `work_loop`, if this happens, we will get the error raised when we `join`
-  # the worker thread
-  class ForceShutdownJoinErrorWorker < ForceShutdownSpyWorker
-    def join; raise Factory.exception; end
+    def start
+      @args[:queue].start
+      @start_called = true
+    end
+
+    def shutdown(timeout)
+      @args[:queue].shutdown
+      @shutdown_timeout = timeout
+      @shutdown_called  = true
+    end
   end
 
 end
