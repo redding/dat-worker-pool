@@ -133,6 +133,12 @@ module DatWorkerPool::Worker
     should have_imeths :work
     should have_imeths :start, :shutdown, :running?, :shutdown?
     should have_imeths :thread_alive?, :join, :raise
+    should have_imeths :queue, :params
+
+    should "know its queue and params" do
+      assert_equal @queue,                subject.queue
+      assert_equal @runner.worker_params, subject.params
+    end
 
     should "call `work!` and its before/after work callbacks using `work`" do
       work_item = Factory.string

@@ -87,6 +87,10 @@ class DatWorkerPool
         @thread.raise(*args) if self.thread_alive?
       end
 
+      # Helpers - TODO make these private once callbacks are instance evald
+      def params; @runner.worker_params; end
+      def queue;  @queue;                end
+
       private
 
       # overwrite this method to add custom work logic; this has to be

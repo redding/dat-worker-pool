@@ -1,44 +1,47 @@
 require 'assert'
 require 'dat-worker-pool'
 
+require 'dat-worker-pool/worker'
+
 class DatWorkerPool
 
   class SystemTests < Assert::Context
     desc "DatWorkerPool"
-    subject{ @work_pool }
+    subject{ @worker_pool }
 
   end
 
   class UseWorkerPoolTests < SystemTests
     setup do
-      @mutex = Mutex.new
-      @results = []
-      @work_pool = DatWorkerPool.new({
-        :num_workers  => 2,
-        :logger       => TEST_LOGGER,
-        :do_work_proc => proc do |work|
-          @mutex.synchronize{ @results << (work * 100) }
-        end
+      @worker_class = Class.new do
+        include DatWorkerPool::Worker
+        def work!(number); params[:results].push(number * 100); end
+      end
+      @results = LockedArray.new
+
+      @worker_pool = DatWorkerPool.new(@worker_class, {
+        :num_workers   => 2,
+        :logger        => TEST_LOGGER,
+        :worker_params => { :results => @results }
       })
-      @work_pool.start
+      @worker_pool.start
     end
 
     should "be able to add work, have it processed and stop the pool" do
-      @work_pool.add_work 1
-      @work_pool.add_work 5
-      @work_pool.add_work 2
-      @work_pool.add_work 4
-      @work_pool.add_work 3
+      subject.add_work 1
+      subject.add_work 5
+      subject.add_work 2
+      subject.add_work 4
+      subject.add_work 3
 
       sleep 0.1 # allow the worker threads to run
+      subject.shutdown(1)
 
-      @work_pool.shutdown(1)
-
-      assert_includes 100, @results
-      assert_includes 200, @results
-      assert_includes 300, @results
-      assert_includes 400, @results
-      assert_includes 500, @results
+      assert_includes 100, @results.values
+      assert_includes 200, @results.values
+      assert_includes 300, @results.values
+      assert_includes 400, @results.values
+      assert_includes 500, @results.values
     end
 
   end
@@ -46,108 +49,106 @@ class DatWorkerPool
   class WorkerBehaviorTests < SystemTests
     desc "workers"
     setup do
-      @work_pool = DatWorkerPool.new({
+      @worker_class = Class.new do
+        include DatWorkerPool::Worker
+        def work!(seconds); sleep(seconds); end
+      end
+      @worker_pool = DatWorkerPool.new(@worker_class, {
         :num_workers  => 2,
-        :logger       => TEST_LOGGER,
-        :do_work_proc => proc{ |work| sleep(work) }
+        :logger       => TEST_LOGGER
       })
-      @work_pool.start
+      @worker_pool.start
     end
 
     should "spawn and wait until work is available" do
       # the workers should be spawned and waiting
-      assert_equal 2,    @work_pool.waiting
-      assert_equal true, @work_pool.worker_available?
+      assert_equal 2,    subject.waiting
+      assert_equal true, subject.worker_available?
 
       # only one worker should be waiting
-      @work_pool.add_work 5
-      assert_equal 1,    @work_pool.waiting
-      assert_equal true, @work_pool.worker_available?
+      subject.add_work 5
+      assert_equal 1,    subject.waiting
+      assert_equal true, subject.worker_available?
 
       # neither worker should be waiting now
-      @work_pool.add_work 5
-      assert_equal 0,     @work_pool.waiting
-      assert_equal false, @work_pool.worker_available?
+      subject.add_work 5
+      assert_equal 0,     subject.waiting
+      assert_equal false, subject.worker_available?
     end
 
     should "go back to waiting when they finish working" do
-      assert_equal 2, @work_pool.waiting
-      @work_pool.add_work 1
-      assert_equal 1, @work_pool.waiting
+      assert_equal 2, subject.waiting
+      subject.add_work 1
+      assert_equal 1, subject.waiting
 
       sleep 1 # allow the worker to run
 
-      assert_equal 2, @work_pool.waiting
+      assert_equal 2, subject.waiting
     end
 
   end
 
   class WorkerCallbackTests < SystemTests
     setup do
-      @error_called       = false
-      @start_called       = false
-      @shutdown_called    = false
-      @sleep_called       = false
-      @wakeup_called      = false
-      @before_work_called = false
-      @after_work_called  = false
+      @callbacks_called = {}
 
-      @worker_pool = DatWorkerPool.new({
-        :do_work_proc => proc{ |work| raise work if work == 'error' }
+      @worker_class = Class.new do
+        include DatWorkerPool::Worker
+
+        # TODO - change once these are instance evald
+        on_start{ |w| w.params[:callbacks_called][:on_start] = true }
+        on_shutdown{ |w| w.params[:callbacks_called][:on_shutdown] = true }
+
+        on_sleep{ |w| w.params[:callbacks_called][:on_sleep] = true }
+        on_wakeup{ |w| w.params[:callbacks_called][:on_wakeup] = true }
+
+        on_error{ |w, e, wi| w.params[:callbacks_called][:on_error] = true }
+
+        before_work{ |w, wi| w.params[:callbacks_called][:before_work] = true }
+        after_work{ |w, wi| w.params[:callbacks_called][:after_work] = true }
+
+        def work!(work_item); raise work_item if work_item == 'error'; end
+      end
+
+      @worker_pool = DatWorkerPool.new(@worker_class, {
+        :logger        => TEST_LOGGER,
+        :worker_params => { :callbacks_called => @callbacks_called }
       })
-
-      @worker_pool.on_worker_error{ @error_called = true }
-      @worker_pool.on_worker_start{ @start_called = true }
-      @worker_pool.on_worker_shutdown{ @shutdown_called = true }
-      @worker_pool.on_worker_sleep{ @sleep_called = true }
-      @worker_pool.on_worker_wakeup{ @wakeup_called = true }
-      @worker_pool.before_work{ @before_work_called = true }
-      @worker_pool.after_work{ @after_work_called = true }
-    end
-    teardown do
-      # TODO - remove once a worker class can be passed
-      DefaultWorker.on_start_callbacks.clear
-      DefaultWorker.on_shutdown_callbacks.clear
-      DefaultWorker.on_sleep_callbacks.clear
-      DefaultWorker.on_wakeup_callbacks.clear
-      DefaultWorker.on_error_callbacks.clear
-      DefaultWorker.before_work_callbacks.clear
-      DefaultWorker.after_work_callbacks.clear
     end
     subject{ @worker_pool }
 
     should "call the worker callbacks as workers wait or wakeup" do
-      assert_false @start_called
-      assert_false @sleep_called
+      assert_nil @callbacks_called[:on_start]
+      assert_nil @callbacks_called[:on_sleep]
       subject.start
-      assert_true @start_called
-      assert_true @sleep_called
+      assert_true @callbacks_called[:on_start]
+      assert_true @callbacks_called[:on_sleep]
 
-      @sleep_called = false
-      assert_false @wakeup_called
-      assert_false @before_work_called
-      assert_false @after_work_called
-      subject.add_work 'work'
-      assert_true @wakeup_called
-      assert_true @before_work_called
-      assert_true @after_work_called
-      assert_true @sleep_called
+      @callbacks_called.delete(:on_sleep)
+      assert_nil @callbacks_called[:on_wakeup]
+      assert_nil @callbacks_called[:before_work]
+      assert_nil @callbacks_called[:after_work]
+      subject.add_work Factory.string
+      assert_true @callbacks_called[:on_wakeup]
+      assert_true @callbacks_called[:before_work]
+      assert_true @callbacks_called[:after_work]
+      assert_true @callbacks_called[:on_sleep]
 
-      @before_work_called = false
-      @after_work_called  = false
-      assert_false @before_work_called
-      assert_false @error_called
-      assert_false @after_work_called
+      @callbacks_called.delete(:before_work)
+      @callbacks_called.delete(:after_work)
+      assert_nil @callbacks_called[:before_work]
+      assert_nil @callbacks_called[:on_error]
+      assert_nil @callbacks_called[:after_work]
       subject.add_work 'error'
-      assert_true @before_work_called
-      assert_true @error_called
-      assert_false @after_work_called
+      assert_true @callbacks_called[:before_work]
+      assert_true @callbacks_called[:on_error]
+      assert_nil @callbacks_called[:after_work]
 
-      @wakeup_called = false
-      assert_false @shutdown_called
+      @callbacks_called.delete(:on_wakeup)
+      assert_nil @callbacks_called[:on_shutdown]
       subject.shutdown
-      assert_true @wakeup_called
-      assert_true @shutdown_called
+      assert_true @callbacks_called[:on_wakeup]
+      assert_true @callbacks_called[:on_shutdown]
     end
 
   end
@@ -155,42 +156,43 @@ class DatWorkerPool
   class ShutdownSystemTests < SystemTests
     desc "shutdown"
     setup do
-      @mutex = Mutex.new
-      @finished = []
-      @work_pool = DatWorkerPool.new({
-        :num_workers  => 2,
-        :logger       => TEST_LOGGER,
-        :do_work_proc => proc do |work|
-          sleep 1
-          @mutex.synchronize{ @finished << work }
-        end
+      @worker_class = Class.new do
+        include DatWorkerPool::Worker
+        def work!(work_item); sleep 1; params[:finished].push(work_item); end
+      end
+      @finished = LockedArray.new
+
+      @worker_pool = DatWorkerPool.new(@worker_class, {
+        :num_workers   => 2,
+        :logger        => TEST_LOGGER,
+        :worker_params => { :finished => @finished }
       })
-      @work_pool.start
-      @work_pool.add_work 'a'
-      @work_pool.add_work 'b'
-      @work_pool.add_work 'c'
+      @worker_pool.start
+      @worker_pool.add_work 'a'
+      @worker_pool.add_work 'b'
+      @worker_pool.add_work 'c'
     end
 
     should "allow any work that has been picked up to be processed" do
       # make sure the workers haven't processed any work
-      assert_equal [], @finished
+      assert_equal [], @finished.values
       subject.shutdown(5)
 
       # NOTE, the last work shouldn't have been processed, as it wasn't
       # picked up by a worker
-      assert_includes     'a', @finished
-      assert_includes     'b', @finished
-      assert_not_includes 'c', @finished
+      assert_includes     'a', @finished.values
+      assert_includes     'b', @finished.values
+      assert_not_includes 'c', @finished.values
 
       assert_equal 0, subject.waiting
       assert_includes 'c', subject.queue.work_items
     end
 
     should "allow jobs to finish by not providing a shutdown timeout" do
-      assert_equal [], @finished
+      assert_equal [], @finished.values
       subject.shutdown
-      assert_includes 'a', @finished
-      assert_includes 'b', @finished
+      assert_includes 'a', @finished.values
+      assert_includes 'b', @finished.values
     end
 
   end
@@ -198,38 +200,55 @@ class DatWorkerPool
   class ForcedShutdownSystemTests < SystemTests
     desc "forced shutdown"
     setup do
-      @mutex = Mutex.new
-      @finished = []
-      @num_workers = 2
-      # don't put leave the worker pool in debug mode
-      @work_pool = DatWorkerPool.new({
-        :num_workers  => @num_workers,
-        :logger       => TEST_LOGGER,
-        :do_work_proc => proc do |work|
-          begin
-            sleep 1
-          rescue ShutdownError => error
-            @mutex.synchronize{ @finished << error }
-            raise error # re-raise it otherwise worker won't shutdown
-          end
+      @worker_class = Class.new do
+        include DatWorkerPool::Worker
+
+        def work!(work_item)
+          sleep 1
+        rescue ShutdownError => error
+          params[:finished].push(error)
+          raise error # re-raise it otherwise worker won't shutdown
         end
+      end
+      @num_workers = 2
+      @finished    = LockedArray.new
+
+      @worker_pool = DatWorkerPool.new(@worker_class, {
+        :num_workers   => @num_workers,
+        :logger        => TEST_LOGGER,
+        :worker_params => { :finished => @finished }
       })
-      @work_pool.start
-      @work_pool.add_work 'a'
-      @work_pool.add_work 'b'
-      @work_pool.add_work 'c'
+      @worker_pool.start
+      @worker_pool.add_work 'a'
+      @worker_pool.add_work 'b'
+      @worker_pool.add_work 'c'
     end
 
     should "force workers to shutdown if they take to long to finish" do
       # make sure the workers haven't processed any work
-      assert_equal [], @finished
+      assert_equal [], @finished.values
       subject.shutdown(0.1)
-      assert_equal @num_workers, @finished.size
-      @finished.each do |error|
+      assert_equal @num_workers, @finished.values.size
+      @finished.values.each do |error|
         assert_instance_of DatWorkerPool::ShutdownError, error
       end
     end
 
+  end
+
+  class LockedArray
+    def initialize
+      @mutex = Mutex.new
+      @array = []
+    end
+
+    def push(value)
+      @mutex.synchronize{ @array.push(value) }
+    end
+
+    def values
+      @mutex.synchronize{ @array }
+    end
   end
 
 end
