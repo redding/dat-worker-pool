@@ -106,13 +106,13 @@ module DatWorkerPool::Worker
     end
 
     def shutdown_worker_queue_and_wait_for_thread_to_stop
-      @worker.shutdown if @worker
+      @worker.dwp_shutdown if @worker
       @queue.shutdown
       wait_for_worker_thread_to_stop
     end
 
     def wait_for_worker_thread_to_stop
-      SystemTimer.timeout(1){ @worker.join } if @worker
+      SystemTimer.timeout(1){ @worker.dwp_join } if @worker
     end
 
   end
@@ -131,13 +131,12 @@ module DatWorkerPool::Worker
     subject{ @worker }
 
     should have_imeths :work
-    should have_imeths :start, :shutdown, :running?, :shutdown?
-    should have_imeths :thread_alive?, :join, :raise
-    should have_imeths :queue, :params
+    should have_imeths :dwp_start, :dwp_shutdown, :dwp_running?, :dwp_shutdown?
+    should have_imeths :dwp_thread_alive?, :dwp_join, :dwp_raise
 
     should "know its queue and params" do
-      assert_equal @queue,                subject.queue
-      assert_equal @runner.worker_params, subject.params
+      assert_equal @queue,                subject.instance_eval{ queue }
+      assert_equal @runner.worker_params, subject.instance_eval{ params }
     end
 
     should "call `work!` and its before/after work callbacks using `work`" do
@@ -150,60 +149,68 @@ module DatWorkerPool::Worker
     end
 
     should "start a thread when its started" do
-      thread = subject.start
+      thread = subject.dwp_start
 
       assert_instance_of Thread, thread
       assert_true thread.alive?
     end
 
-    should "know if its running and if its thread is alive or not" do
-      assert_false subject.running?
-      assert_false subject.thread_alive?
+    should "add itself to its runner when its started" do
+      added_worker = nil
+      Assert.stub(@runner, :add_worker){ |worker| added_worker = worker }
+      subject.dwp_start
 
-      subject.start
-      assert_true subject.running?
-      assert_true subject.thread_alive?
-
-      subject.shutdown
-      assert_false subject.running?
-      assert_true subject.thread_alive?
-
-      shutdown_worker_queue_and_wait_for_thread_to_stop
-      assert_false subject.running?
-      assert_false subject.thread_alive?
+      assert_same subject, added_worker
     end
 
-    should "despawn itself from its runner when its thread stops" do
-      despawned_worker = nil
-      Assert.stub(@runner, :despawn_worker){ |worker| despawned_worker = worker }
-      subject.start
+    should "know if its running and if its thread is alive or not" do
+      assert_false subject.dwp_running?
+      assert_false subject.dwp_thread_alive?
+
+      subject.dwp_start
+      assert_true subject.dwp_running?
+      assert_true subject.dwp_thread_alive?
+
+      subject.dwp_shutdown
+      assert_false subject.dwp_running?
+      assert_true subject.dwp_thread_alive?
 
       shutdown_worker_queue_and_wait_for_thread_to_stop
-      assert_same subject, despawned_worker
+      assert_false subject.dwp_running?
+      assert_false subject.dwp_thread_alive?
+    end
+
+    should "remove itself from its runner when its thread stops" do
+      removed_worker = nil
+      Assert.stub(@runner, :remove_worker){ |worker| removed_worker = worker }
+      subject.dwp_start
+
+      shutdown_worker_queue_and_wait_for_thread_to_stop
+      assert_same subject, removed_worker
     end
 
     should "allow joining and raising on its thread" do
       thread_spy = ThreadSpy.new
       Assert.stub(Thread, :new){ thread_spy }
 
-      subject.start
+      subject.dwp_start
 
-      subject.join
+      subject.dwp_join
       assert_nil thread_spy.join_seconds
       assert_true thread_spy.join_called
 
       seconds = Factory.integer
-      subject.join(seconds)
+      subject.dwp_join(seconds)
       assert_equal seconds, thread_spy.join_seconds
 
       exception = Factory.exception
-      subject.raise(exception)
+      subject.dwp_raise(exception)
       assert_equal exception, thread_spy.raised_exception
     end
 
     should "not allow joining or raising if it hasn't been started" do
-      assert_nothing_raised{ subject.join(Factory.integer) }
-      assert_nothing_raised{ subject.raise(Factory.exception) }
+      assert_nothing_raised{ subject.dwp_join(Factory.integer) }
+      assert_nothing_raised{ subject.dwp_raise(Factory.exception) }
     end
 
     should "increment its runners workers waiting everytime it sleeps" do
@@ -211,7 +218,7 @@ module DatWorkerPool::Worker
       Assert.stub(@runner, :increment_worker_waiting){ increment_call_count += 1 }
 
       # the worker immediately goes to sleep because there isn't any work
-      subject.start
+      subject.dwp_start
       assert_equal 1, increment_call_count
 
       # the worker wakes up and runs this work item, then goes back to sleep
@@ -224,7 +231,7 @@ module DatWorkerPool::Worker
       Assert.stub(@runner, :decrement_worker_waiting){ decrement_call_count += 1 }
 
       # the worker immediately goes to sleep because there isn't any work
-      subject.start
+      subject.dwp_start
       assert_equal 0, decrement_call_count
 
       # the worker wakes up and runs this work item
@@ -238,7 +245,7 @@ module DatWorkerPool::Worker
 
     should "call its `work` method on any pushed items while running" do
       assert_nil subject.item_worked_on
-      subject.start
+      subject.dwp_start
       assert_nil subject.item_worked_on
 
       work_item = Factory.string
@@ -247,7 +254,7 @@ module DatWorkerPool::Worker
     end
 
     should "not call its `work` method if it pops a `nil` work item" do
-      subject.start
+      subject.dwp_start
 
       @queue.push(nil)
       assert_false subject.work_called
@@ -258,19 +265,71 @@ module DatWorkerPool::Worker
       assert_false subject.work_called
     end
 
+    should "run its on-error callbacks if its on-start callbacks error" do
+      exception = Factory.exception
+      subject.on_start_error = exception
+      subject.dwp_start
+
+      assert_equal exception, subject.on_error_exception
+      assert_nil subject.on_error_work_item
+    end
+
+    should "stop its thread if its on-start callbacks error" do
+      exception = Factory.exception
+      subject.on_start_error = exception
+      subject.dwp_start
+
+      wait_for_worker_thread_to_stop
+      assert_false subject.dwp_thread_alive?
+      assert_false subject.dwp_running?
+    end
+
+    should "add itself on its runner even if its on-start callbacks error" do
+      added_worker = nil
+      Assert.stub(@runner, :add_worker){ |worker| added_worker = worker }
+
+      exception = Factory.exception
+      subject.on_start_error = exception
+      subject.dwp_start
+
+      assert_same subject, added_worker
+    end
+
+    should "run its on-error callbacks if its on-shutdown callbacks error" do
+      exception = Factory.exception
+      subject.on_shutdown_error = exception
+      subject.dwp_start
+      shutdown_worker_queue_and_wait_for_thread_to_stop
+
+      assert_equal exception, subject.on_error_exception
+      assert_nil subject.on_error_work_item
+    end
+
+    should "remove itself from its runner even if its on-shutdown callbacks error" do
+      removed_worker = nil
+      Assert.stub(@runner, :remove_worker){ |worker| removed_worker = worker }
+
+      exception = Factory.exception
+      subject.on_shutdown_error = exception
+      subject.dwp_start
+      shutdown_worker_queue_and_wait_for_thread_to_stop
+
+      assert_same subject, removed_worker
+    end
+
     should "not stop its thread when an error occurs while running" do
       exception = Factory.exception
       setup_work_loop_to_raise_exception(exception)
-      subject.start
+      subject.dwp_start
 
       @queue.push(Factory.string)
-      assert_true subject.thread_alive?
+      assert_true subject.dwp_thread_alive?
     end
 
     should "run its on-error callbacks if an error occurs while running" do
       exception = Factory.exception
       error_method = setup_work_loop_to_raise_exception(exception)
-      subject.start
+      subject.dwp_start
       work_item = Factory.string
       @queue.push(work_item)
 
@@ -283,35 +342,40 @@ module DatWorkerPool::Worker
     should "stop its thread when a shutdown error is raised while running" do
       exception = Factory.exception(DatWorkerPool::ShutdownError)
       setup_work_loop_to_raise_exception(exception)
-      subject.start
+      subject.dwp_start
       @queue.push(Factory.string)
 
       wait_for_worker_thread_to_stop
-      assert_false subject.thread_alive?
+      assert_false subject.dwp_thread_alive?
     end
 
     should "not re-raise a shutdown error when joined" do
       exception = Factory.exception(DatWorkerPool::ShutdownError)
       setup_work_loop_to_raise_exception(exception)
-      subject.start
+      subject.dwp_start
       @queue.push(Factory.string)
 
       SystemTimer.timeout(1) do
-        assert_nothing_raised{ subject.join }
+        assert_nothing_raised{ subject.dwp_join }
       end
     end
 
-    should "run its on-error callbacks when a shutdown error is raised while running" do
+    should "only run its on-error callbacks when shutdown error is raised with a work item" do
       exception = Factory.exception(DatWorkerPool::ShutdownError)
       error_method = setup_work_loop_to_raise_exception(exception)
-      subject.start
+      subject.dwp_start
       work_item = Factory.string
       @queue.push(work_item)
 
-      assert_equal exception, subject.on_error_exception
-      # the on-sleep callback will not include a work item if it errors
-      exp = error_method == :on_sleep_error ? nil : work_item
-      assert_equal exp, subject.on_error_work_item
+      # the on-sleep callback will not have popped a work item so it won't run
+      # the on-error callbacks
+      if error_method != :on_sleep_error
+        assert_equal exception, subject.on_error_exception
+        assert_equal work_item, subject.on_error_work_item
+      else
+        assert_nil subject.on_error_exception
+        assert_nil subject.on_error_work_item
+      end
     end
 
     should "run callbacks when its started" do
@@ -320,7 +384,7 @@ module DatWorkerPool::Worker
       assert_nil subject.first_on_sleep_call_order
       assert_nil subject.second_on_sleep_call_order
 
-      subject.start
+      subject.dwp_start
 
       assert_equal 1, subject.first_on_start_call_order
       assert_equal 2, subject.second_on_start_call_order
@@ -329,7 +393,7 @@ module DatWorkerPool::Worker
     end
 
     should "run its callbacks when work is pushed" do
-      subject.start
+      subject.dwp_start
       subject.reset_call_order
 
       assert_nil subject.first_on_sleep_call_order
@@ -356,7 +420,7 @@ module DatWorkerPool::Worker
     end
 
     should "run callbacks when its shutdown" do
-      subject.start
+      subject.dwp_start
       subject.reset_call_order
 
       assert_nil subject.first_on_wakeup_call_order
@@ -380,7 +444,7 @@ module DatWorkerPool::Worker
       :after_work_error
     ].freeze
     def setup_work_loop_to_raise_exception(exception)
-      error_method = ERROR_METHODS.choice
+      error_method = :on_sleep_error # ERROR_METHODS.choice
       @worker.send("#{error_method}=", exception)
       error_method
     end
@@ -390,66 +454,65 @@ module DatWorkerPool::Worker
   class TestWorker
     include DatWorkerPool::Worker
 
-    attr_accessor :first_on_start_call_order, :second_on_start_call_order
-    attr_accessor :first_on_shutdown_call_order, :second_on_shutdown_call_order
-    attr_accessor :first_on_sleep_call_order, :second_on_sleep_call_order
-    attr_accessor :first_on_wakeup_call_order, :second_on_wakeup_call_order
-    attr_accessor :first_before_work_call_order, :second_before_work_call_order
-    attr_accessor :first_after_work_call_order, :second_after_work_call_order
-    attr_accessor :work_call_order
+    attr_reader :first_on_start_call_order, :second_on_start_call_order
+    attr_reader :first_on_shutdown_call_order, :second_on_shutdown_call_order
+    attr_reader :first_on_sleep_call_order, :second_on_sleep_call_order
+    attr_reader :first_on_wakeup_call_order, :second_on_wakeup_call_order
+    attr_reader :first_before_work_call_order, :second_before_work_call_order
+    attr_reader :first_after_work_call_order, :second_after_work_call_order
+    attr_reader :work_call_order
 
-    attr_accessor :before_work_item_worked_on, :after_work_item_worked_on
-    attr_accessor :item_worked_on
+    attr_reader :before_work_item_worked_on, :after_work_item_worked_on
+    attr_reader :item_worked_on
 
+    attr_accessor :on_start_error, :on_shutdown_error
     attr_accessor :on_sleep_error, :on_wakeup_error
     attr_accessor :before_work_error, :after_work_error
     attr_accessor :work_error
 
-    attr_accessor :on_error_exception, :on_error_work_item
+    attr_reader :on_error_exception, :on_error_work_item
 
-    # TODO - change once these are instance evald
-    on_start{ |w| w.first_on_start_call_order  = w.next_call_order }
-    on_start{ |w| w.second_on_start_call_order = w.next_call_order }
-
-    on_shutdown{ |w| w.first_on_shutdown_call_order  = w.next_call_order }
-    on_shutdown{ |w| w.second_on_shutdown_call_order = w.next_call_order }
-
-    on_sleep{ |w| w.first_on_sleep_call_order  = w.next_call_order }
-    on_sleep do |w|
-      w.raise_error_if_set(:on_sleep)
-      w.second_on_sleep_call_order = w.next_call_order
+    on_start{ @first_on_start_call_order  = next_call_order }
+    on_start do
+      raise_error_if_set(:on_start)
+      @second_on_start_call_order = next_call_order
     end
 
-    on_wakeup{ |w| w.first_on_wakeup_call_order  = w.next_call_order }
-    on_wakeup do |w|
-      w.raise_error_if_set(:on_wakeup)
-      w.second_on_wakeup_call_order = w.next_call_order
+    on_shutdown{ @first_on_shutdown_call_order  = next_call_order }
+    on_shutdown do
+      raise_error_if_set(:on_shutdown)
+      @second_on_shutdown_call_order = next_call_order
     end
 
-    before_work{ |w, work_item| w.first_before_work_call_order = w.next_call_order }
-    before_work do |w, work_item|
-      w.raise_error_if_set(:before_work)
-      w.before_work_item_worked_on    = work_item
-      w.second_before_work_call_order = w.next_call_order
+    on_sleep{ @first_on_sleep_call_order = next_call_order }
+    on_sleep do
+      raise_error_if_set(:on_sleep)
+      @second_on_sleep_call_order = next_call_order
     end
 
-    after_work{ |w, work_item| w.first_after_work_call_order = w.next_call_order }
-    after_work do |w, work_item|
-      w.raise_error_if_set(:after_work)
-      w.after_work_item_worked_on    = work_item
-      w.second_after_work_call_order = w.next_call_order
+    on_wakeup{ @first_on_wakeup_call_order = next_call_order }
+    on_wakeup do
+      raise_error_if_set(:on_wakeup)
+      @second_on_wakeup_call_order = next_call_order
     end
 
-    on_error do |w, exception, work_item|
-      w.on_error_exception = exception
-      w.on_error_work_item = work_item
+    before_work{ |work_item| @first_before_work_call_order = next_call_order }
+    before_work do |work_item|
+      raise_error_if_set(:before_work)
+      @before_work_item_worked_on    = work_item
+      @second_before_work_call_order = next_call_order
     end
 
-    def work!(work_item)
-      raise_error_if_set(:work)
-      @work_called     = true
-      @item_worked_on  = work_item
-      @work_call_order = next_call_order
+    after_work{ |work_item| @first_after_work_call_order = next_call_order }
+    after_work do |work_item|
+      raise_error_if_set(:after_work)
+      @after_work_item_worked_on    = work_item
+      @second_after_work_call_order = next_call_order
+    end
+
+    on_error do |exception, work_item|
+      @on_error_exception = exception
+      @on_error_work_item = work_item
     end
 
     def work_called; !!@work_called; end
@@ -469,6 +532,15 @@ module DatWorkerPool::Worker
       @first_after_work_call_order   = nil
       @second_after_work_call_order  = nil
       @work_call_order               = nil
+    end
+
+    private
+
+    def work!(work_item)
+      raise_error_if_set(:work)
+      @work_called     = true
+      @item_worked_on  = work_item
+      @work_call_order = next_call_order
     end
 
     def next_call_order; @order = (@order || 0) + 1; end
