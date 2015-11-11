@@ -15,8 +15,12 @@ class DatWorkerPool
         start!
       end
 
-      def shutdown
+      def signal_shutdown
         @running = false
+      end
+
+      def shutdown
+        self.signal_shutdown
         shutdown!
       end
 

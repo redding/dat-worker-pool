@@ -46,7 +46,8 @@ module DatWorkerPool::Queue
     end
     subject{ @queue }
 
-    should have_imeths :start, :shutdown, :running?, :shutdown?
+    should have_imeths :start, :signal_shutdown, :shutdown
+    should have_imeths :running?, :shutdown?
     should have_imeths :push, :pop
 
     should "set its flags using `start` and `shutdown`" do
@@ -64,6 +65,17 @@ module DatWorkerPool::Queue
       assert_false subject.start_called
       subject.start
       assert_true subject.start_called
+    end
+
+    should "set its shutdown flag using `signal_shutdown`" do
+      assert_false subject.running?
+      assert_false subject.shutdown_called
+      subject.start
+      assert_true  subject.running?
+      assert_false subject.shutdown_called
+      subject.signal_shutdown
+      assert_false subject.running?
+      assert_false subject.shutdown_called
     end
 
     should "call `shutdown!` using `shutdown`" do

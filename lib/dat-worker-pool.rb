@@ -43,7 +43,7 @@ class DatWorkerPool
   end
 
   def shutdown(timeout = nil)
-    @runner.shutdown(timeout)
+    @runner.shutdown(timeout, caller)
   end
 
   def add_work(work_item)
@@ -68,8 +68,6 @@ class DatWorkerPool
       define_method(name.downcase){ |*args| } # no-op
     end
   end
-
-  TimeoutError = Class.new(RuntimeError)
 
   # this error should never be "swallowed", if it is caught be sure to re-raise
   # it so the workers shutdown; otherwise workers will get killed

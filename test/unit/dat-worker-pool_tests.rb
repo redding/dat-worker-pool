@@ -97,6 +97,8 @@ class DatWorkerPool
       subject.shutdown
       assert_true @runner_spy.shutdown_called
       assert_nil @runner_spy.shutdown_timeout
+      exp = "test/unit/dat-worker-pool_tests.rb"
+      assert_match exp, @runner_spy.shutdown_backtrace.first
 
       timeout = Factory.integer
       subject.shutdown(timeout)
@@ -171,13 +173,15 @@ class DatWorkerPool
 
   class RunnerSpy < DatWorkerPool::Runner
     attr_accessor :args
-    attr_reader :start_called, :shutdown_timeout, :shutdown_called
+    attr_reader :start_called, :shutdown_called
+    attr_reader :shutdown_timeout, :shutdown_backtrace
 
     def initialize
       super({})
-      @start_called     = false
-      @shutdown_timeout = nil
-      @shutdown_called  = false
+      @start_called       = false
+      @shutdown_called    = false
+      @shutdown_timeout   = nil
+      @shutdown_backtrace = nil
     end
 
     def start
@@ -185,10 +189,11 @@ class DatWorkerPool
       @start_called = true
     end
 
-    def shutdown(timeout)
+    def shutdown(timeout, backtrace)
       @args[:queue].shutdown
-      @shutdown_timeout = timeout
-      @shutdown_called  = true
+      @shutdown_called    = true
+      @shutdown_timeout   = timeout
+      @shutdown_backtrace = backtrace
     end
   end
 

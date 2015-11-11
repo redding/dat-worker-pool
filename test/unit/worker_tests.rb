@@ -106,7 +106,7 @@ module DatWorkerPool::Worker
     end
 
     def shutdown_worker_queue_and_wait_for_thread_to_stop
-      @worker.dwp_shutdown if @worker
+      @worker.dwp_signal_shutdown if @worker
       @queue.shutdown
       wait_for_worker_thread_to_stop
     end
@@ -131,7 +131,8 @@ module DatWorkerPool::Worker
     subject{ @worker }
 
     should have_imeths :work
-    should have_imeths :dwp_start, :dwp_shutdown, :dwp_running?, :dwp_shutdown?
+    should have_imeths :dwp_start, :dwp_signal_shutdown
+    should have_imeths :dwp_running?, :dwp_shutdown?
     should have_imeths :dwp_thread_alive?, :dwp_join, :dwp_raise
 
     should "know its queue and params" do
@@ -171,7 +172,7 @@ module DatWorkerPool::Worker
       assert_true subject.dwp_running?
       assert_true subject.dwp_thread_alive?
 
-      subject.dwp_shutdown
+      subject.dwp_signal_shutdown
       assert_false subject.dwp_running?
       assert_true subject.dwp_thread_alive?
 
@@ -347,17 +348,6 @@ module DatWorkerPool::Worker
 
       wait_for_worker_thread_to_stop
       assert_false subject.dwp_thread_alive?
-    end
-
-    should "not re-raise a shutdown error when joined" do
-      exception = Factory.exception(DatWorkerPool::ShutdownError)
-      setup_work_loop_to_raise_exception(exception)
-      subject.dwp_start
-      @queue.push(Factory.string)
-
-      SystemTimer.timeout(1) do
-        assert_nothing_raised{ subject.dwp_join }
-      end
     end
 
     should "only run its on-error callbacks when shutdown error is raised with a work item" do

@@ -20,7 +20,7 @@ class DatWorkerPool::Runner
     setup do
       @num_workers   = Factory.integer(4)
       @queue         = DatWorkerPool::DefaultQueue.new
-      @worker_class  = WorkerSpy
+      @worker_class  = TestWorker
       @worker_params = { Factory.string => Factory.string }
 
       @mutex_spy = MutexSpy.new
@@ -35,7 +35,7 @@ class DatWorkerPool::Runner
       @runner = @runner_class.new(@options)
     end
     teardown do
-      subject.shutdown(0)
+      subject.shutdown(0) rescue false
     end
     subject{ @runner }
 
@@ -143,7 +143,12 @@ class DatWorkerPool::Runner
         block.call
       end
 
+      @options[:worker_class] = ShutdownSpyWorker
+      @runner = @runner_class.new(@options)
       @runner.start
+      # we need a reference to the workers, the runners workers will get removed
+      # as they shutdown
+      @running_workers = @runner.workers.dup
     end
 
     should "optionally timeout when shutdown" do
@@ -159,11 +164,11 @@ class DatWorkerPool::Runner
     end
 
     should "shutdown all of its workers" do
-      subject.workers.each do |worker|
+      @running_workers.each do |worker|
         assert_false worker.dwp_shutdown?
       end
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
-      subject.workers.each do |worker|
+      @running_workers.each do |worker|
         assert_true worker.dwp_shutdown?
       end
     end
@@ -175,93 +180,106 @@ class DatWorkerPool::Runner
     end
 
     should "join its workers waiting for them to finish" do
-      subject.workers.each do |worker|
+      @running_workers.each do |worker|
         assert_false worker.join_called
       end
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
-      subject.workers.each do |worker|
+      @running_workers.each do |worker|
         assert_true worker.join_called
       end
     end
 
-  end
-
-  class ForceShutdownSetupTests < ShutdownSetupTests
-    desc "which times out and is forced to shutdown"
-    setup do
-      # this makes the runner force shutdown, by raising timeout error we
-      # are saying the graceful shutdown timed out
-      Assert.stub(OptionalTimeout, :new){ raise DatWorkerPool::TimeoutError }
+    should "join all workers even if one raises an error when joined" do
+      @running_workers.choice.join_error = Factory.exception
+      subject.shutdown(Factory.boolean ? Factory.integer : nil)
+      @running_workers.each do |worker|
+        assert_true worker.join_called
+      end
+      assert_equal [], subject.workers
     end
 
-  end
-
-  class ForcedShutdownTests < ForceShutdownSetupTests
-    setup do
-      @options[:worker_class] = ForceShutdownSpyWorker
-      @runner = @runner_class.new(@options)
-      @runner.start
-
-      @workers = @runner.workers.dup
-    end
-
-    should "force workers to shutdown by raising an error in their thread" do
+    should "force its workers to shutdown if a timeout error occurs" do
+      Assert.stub(OptionalTimeout, :new){ raise TimeoutInterruptError }
       subject.shutdown(Factory.integer)
 
-      @workers.each do |worker|
+      @running_workers.each do |worker|
         assert_instance_of DatWorkerPool::ShutdownError, worker.raised_error
         assert_true worker.join_called
       end
+      assert_equal [], subject.workers
     end
 
-  end
+    should "force its workers to shutdown if a non-timeout error occurs" do
+      queue_exception = Factory.exception
+      Assert.stub(@queue, :shutdown){ raise queue_exception }
 
-  class ForcedShutdownWithErrorsWhileJoiningTests < ForceShutdownSetupTests
-    desc "forced shutdown with errors while joining worker threads"
-    setup do
-      @options[:worker_class] = ForceShutdownJoinErrorWorker
-      @runner = @runner_class.new(@options)
-      @runner.start
-    end
-
-    should "not raise any errors and continue shutting down" do
-      # if this is broken its possible it can create an infinite loop, so we
-      # time it out and let it throw an exception
-      SystemTimer.timeout(1) do
-        assert_nothing_raised{ subject.shutdown(Factory.integer) }
+      caught_exception = nil
+      begin
+        subject.shutdown(Factory.integer)
+      rescue StandardError => caught_exception
       end
+      assert_same queue_exception, caught_exception
+
+      @running_workers.each do |worker|
+        assert_instance_of DatWorkerPool::ShutdownError, worker.raised_error
+        assert_true worker.join_called
+      end
+      assert_equal [], subject.workers
+    end
+
+    should "force shutdown all of its workers even if one raises an error when joining" do
+      Assert.stub(OptionalTimeout, :new){ raise TimeoutInterruptError }
+      error_class = Factory.boolean ? DatWorkerPool::ShutdownError : RuntimeError
+      @running_workers.choice.join_error = Factory.exception(error_class)
+      subject.shutdown(Factory.boolean ? Factory.integer : nil)
+
+      @running_workers.each do |worker|
+        assert_instance_of DatWorkerPool::ShutdownError, worker.raised_error
+        assert_true worker.join_called
+      end
+      assert_equal [], subject.workers
     end
 
   end
 
-  class WorkerSpy
+  class TestWorker
     include DatWorkerPool::Worker
+  end
 
+  class ShutdownSpyWorker < TestWorker
     attr_reader :join_called
+    attr_accessor :join_error, :raised_error
+
+    # this pauses the shutdown so we can test that join or raise are called
+    # depending if we are doing a standard or forced shutdown; otherwise the
+    # worker threads can exit before join or raise ever gets called on them and
+    # then there is nothing to test
+    on_shutdown{ wait_for_join_or_raise }
 
     def initialize(*args)
       super
-      @join_called = false
+      @mutex        = Mutex.new
+      @cond_var     = ConditionVariable.new
+      @join_called  = false
+      @join_error   = nil
+      @raised_error = nil
     end
 
-    def dwp_join(*args); @join_called = true; end
-  end
+    def dwp_join(*args)
+      @join_called = true
+      raise @join_error if @join_error
+      @mutex.synchronize{ @cond_var.broadcast }
+    end
 
-  class ForceShutdownSpyWorker < WorkerSpy
-    attr_reader :raised_error
+    def dwp_raise(error)
+      @raised_error = error
+    end
 
-    def dwp_start; end
-    def dwp_raise(error); @raised_error = error; end
-  end
+    private
 
-  # this creates a rare scenario where as we are joining a worker, it throws
-  # an error; this can happen when force shutting down a worker; we raise an
-  # error in the worker thread to force it to shut down, the error can be raised
-  # at any point in the worker thread, including its ensure block in its
-  # `work_loop`, if this happens, we will get the error raised when we `join`
-  # the worker thread
-  class ForceShutdownJoinErrorWorker < ForceShutdownSpyWorker
-    def dwp_join; raise Factory.exception; end
+    def wait_for_join_or_raise
+      @mutex.synchronize{ @cond_var.wait(@mutex) }
+    end
   end
 
 end
