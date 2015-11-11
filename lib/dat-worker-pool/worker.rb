@@ -59,7 +59,7 @@ class DatWorkerPool
         @dwp_thread ||= Thread.new{ dwp_work_loop }
       end
 
-      def dwp_shutdown
+      def dwp_signal_shutdown
         @dwp_running = false
       end
 
@@ -99,14 +99,26 @@ class DatWorkerPool
         raise NotImplementedError
       end
 
-      # rescue `ShutdownError` and ignore it, its already been passed to the
-      # on-error callbacks in `dwp_fetch_and_work`; the shutdown error is just
-      # used to force the worker to exit its infinite loop if the worker pool is
-      # forcing itself to shutdown
+      # rescue `ShutdownError` but re-raise it after calling the on-error
+      # callbacks, this ensures it causes the loop to exit
       def dwp_work_loop
         dwp_setup
-        dwp_fetch_and_work while self.dwp_running?
-      rescue ShutdownError
+        while self.dwp_running?
+          begin
+            work_item = nil
+            @dwp_runner.increment_worker_waiting
+            dwp_run_callback 'on_sleep'
+            work_item = queue.pop
+            dwp_run_callback 'on_wakeup'
+            @dwp_runner.decrement_worker_waiting
+            work(work_item) if !work_item.nil?
+          rescue ShutdownError => exception
+            dwp_handle_exception(exception, work_item) if work_item
+            Thread.current.raise exception
+          rescue StandardError => exception
+            dwp_handle_exception(exception, work_item)
+          end
+        end
       ensure
         dwp_teardown
       end
@@ -130,23 +142,6 @@ class DatWorkerPool
         @dwp_runner.remove_worker(self)
         @dwp_running = false
         @dwp_thread  = nil
-      end
-
-      # rescue `ShutdownError` but re-raise it after calling the on-error
-      # callbacks, this ensures it causes the loop in `dwp_work_loop` to exit
-      def dwp_fetch_and_work
-        work_item = nil
-        @dwp_runner.increment_worker_waiting
-        dwp_run_callback 'on_sleep'
-        work_item = queue.pop
-        dwp_run_callback 'on_wakeup'
-        @dwp_runner.decrement_worker_waiting
-        work(work_item) if work_item
-      rescue ShutdownError => exception
-        dwp_handle_exception(exception, work_item) if work_item
-        Thread.current.raise exception
-      rescue StandardError => exception
-        dwp_handle_exception(exception, work_item)
       end
 
       def dwp_handle_exception(exception, work_item = nil)

@@ -202,12 +202,9 @@ class DatWorkerPool
       @worker_class = Class.new do
         include DatWorkerPool::Worker
 
-        def work!(work_item)
-          sleep 1
-        rescue ShutdownError => error
-          params[:finished].push(error)
-          raise error # re-raise it otherwise worker won't shutdown
-        end
+        on_error{ |e, wi| params[:finished].push(e) }
+
+        def work!(work_item); sleep 1; end
       end
       @num_workers = 2
       @finished    = LockedArray.new
@@ -223,7 +220,7 @@ class DatWorkerPool
       @worker_pool.add_work 'c'
     end
 
-    should "force workers to shutdown if they take to long to finish" do
+    should "force workers to shutdown if they take too long to finish" do
       # make sure the workers haven't processed any work
       assert_equal [], @finished.values
       subject.shutdown(0.1)
