@@ -6,15 +6,14 @@ class DatWorkerPool
 
   class Runner
 
-    attr_reader :num_workers, :worker_class, :workers
-    attr_reader :queue
+    attr_reader :num_workers, :worker_class, :worker_params
+    attr_reader :queue, :workers
 
-    # TODO - remove "do work proc" once pool is passed a worker class
     def initialize(args)
-      @num_workers  = args[:num_workers]
-      @queue        = args[:queue]
-      @worker_class = args[:worker_class]
-      @do_work_proc = args[:do_work_proc]
+      @num_workers   = args[:num_workers]
+      @queue         = args[:queue]
+      @worker_class  = args[:worker_class]
+      @worker_params = args[:worker_params]
 
       @mutex   = Mutex.new
       @workers = []
@@ -67,8 +66,6 @@ class DatWorkerPool
     def spawn_worker
       @mutex.synchronize do
         @worker_class.new(self, @queue).tap do |w|
-          # TODO - remove once a custom worker class can be passed to pool
-          w.on_work = @do_work_proc
           @workers << w
           w.start
         end

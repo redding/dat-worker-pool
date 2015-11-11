@@ -4,6 +4,7 @@ require 'dat-worker-pool'
 require 'system_timer'
 require 'dat-worker-pool/queue'
 require 'dat-worker-pool/runner'
+require 'dat-worker-pool/worker'
 
 class DatWorkerPool
 
@@ -24,9 +25,10 @@ class DatWorkerPool
   class InitSetupTests < UnitTests
     desc "when init"
     setup do
-      @num_workers = Factory.integer(4)
-      @logger      = NullLogger.new
-      @queue       = TestQueue.new
+      @num_workers   = Factory.integer(4)
+      @logger        = NullLogger.new
+      @queue         = TestQueue.new
+      @worker_params = { Factory.string => Factory.string }
 
       @runner_spy = RunnerSpy.new
       Assert.stub(DatWorkerPool::Runner, :new) do |args|
@@ -34,11 +36,15 @@ class DatWorkerPool
         @runner_spy
       end
 
+      @worker_class = Class.new do
+        include DatWorkerPool::Worker
+        def work!(work_item); end
+      end
       @options = {
-        :do_work_proc => proc{ },
-        :num_workers  => @num_workers,
-        :logger       => @logger,
-        :queue        => @queue
+        :num_workers   => @num_workers,
+        :logger        => @logger,
+        :queue         => @queue,
+        :worker_params => @worker_params
       }
     end
     subject{ @worker_pool }
@@ -48,31 +54,13 @@ class DatWorkerPool
   class InitTests < InitSetupTests
     desc "when init"
     setup do
-      @worker_pool = @worker_pool_class.new(@options)
-    end
-    teardown do
-      # TODO - remove once a worker class can be passed
-      DefaultWorker.on_start_callbacks.clear
-      DefaultWorker.on_shutdown_callbacks.clear
-      DefaultWorker.on_sleep_callbacks.clear
-      DefaultWorker.on_wakeup_callbacks.clear
-      DefaultWorker.on_error_callbacks.clear
-      DefaultWorker.before_work_callbacks.clear
-      DefaultWorker.after_work_callbacks.clear
+      @worker_pool = @worker_pool_class.new(@worker_class, @options)
     end
     subject{ @worker_pool }
 
     should have_readers :logger, :queue
     should have_imeths :start, :shutdown, :add_work
     should have_imeths :num_workers, :waiting, :worker_available?
-    should have_imeths :on_worker_start_callbacks, :on_worker_shutdown_callbacks
-    should have_imeths :on_worker_sleep_callbacks, :on_worker_wakeup_callbacks
-    should have_imeths :on_worker_error_callbacks
-    should have_imeths :before_work_callbacks, :after_work_callbacks
-    should have_imeths :on_worker_start, :on_worker_shutdown
-    should have_imeths :on_worker_sleep, :on_worker_wakeup
-    should have_imeths :on_worker_error
-    should have_imeths :before_work, :after_work
 
     should "know its attributes" do
       assert_equal @logger, subject.logger
@@ -81,20 +69,21 @@ class DatWorkerPool
 
     should "build a runner" do
       exp = {
-        :num_workers  => @num_workers,
-        :queue        => @queue,
-        :worker_class => DefaultWorker,
-        :do_work_proc => @options[:do_work_proc]
+        :num_workers   => @num_workers,
+        :queue         => @queue,
+        :worker_class  => @worker_class,
+        :worker_params => @worker_params
       }
       assert_equal exp, @runner_spy.args
     end
 
     should "default its attributes" do
-      worker_pool = @worker_pool_class.new
+      worker_pool = @worker_pool_class.new(@worker_class)
       assert_instance_of NullLogger, worker_pool.logger
       assert_instance_of DatWorkerPool::DefaultQueue, worker_pool.queue
 
       assert_equal DEFAULT_NUM_WORKERS, @runner_spy.args[:num_workers]
+      assert_nil @runner_spy.args[:worker_params]
     end
 
     should "start its runner when its started" do
@@ -119,53 +108,17 @@ class DatWorkerPool
       assert_equal @runner_spy.workers_waiting_count, subject.waiting
     end
 
-    should "raise an argument error if given an invalid number of workers" do
-      assert_raises(ArgumentError) do
-        @worker_pool_class.new({
-          :num_workers  => [0, (Factory.integer * -1)].choice,
-          :do_work_proc => proc{ }
-        })
-      end
+    should "raise an argument error if given an invalid worker class" do
+      assert_raises(ArgumentError){ @worker_pool_class.new(Module.new) }
+      assert_raises(ArgumentError){ @worker_pool_class.new(Class.new) }
     end
 
-    # TODO - remove once a worker class can be passed
-    should "demeter its worker callbacks" do
-      callback = proc{ Factory.string }
-
-      subject.on_worker_start(&callback)
-      assert_equal callback, DefaultWorker.on_start_callbacks.last
-      exp = DefaultWorker.on_start_callbacks
-      assert_equal exp, subject.on_worker_start_callbacks
-
-      subject.on_worker_shutdown(&callback)
-      assert_equal callback, DefaultWorker.on_shutdown_callbacks.last
-      exp = DefaultWorker.on_shutdown_callbacks
-      assert_equal exp, subject.on_worker_shutdown_callbacks
-
-      subject.on_worker_sleep(&callback)
-      assert_equal callback, DefaultWorker.on_sleep_callbacks.last
-      exp = DefaultWorker.on_sleep_callbacks
-      assert_equal exp, subject.on_worker_sleep_callbacks
-
-      subject.on_worker_wakeup(&callback)
-      assert_equal callback, DefaultWorker.on_wakeup_callbacks.last
-      exp = DefaultWorker.on_wakeup_callbacks
-      assert_equal exp, subject.on_worker_wakeup_callbacks
-
-      subject.on_worker_error(&callback)
-      assert_equal callback, DefaultWorker.on_error_callbacks.last
-      exp = DefaultWorker.on_error_callbacks
-      assert_equal exp, subject.on_worker_error_callbacks
-
-      subject.before_work(&callback)
-      assert_equal callback, DefaultWorker.before_work_callbacks.last
-      exp = DefaultWorker.before_work_callbacks
-      assert_equal exp, subject.before_work_callbacks
-
-      subject.after_work(&callback)
-      assert_equal callback, DefaultWorker.after_work_callbacks.last
-      exp = DefaultWorker.after_work_callbacks
-      assert_equal exp, subject.after_work_callbacks
+    should "raise an argument error if given an invalid number of workers" do
+      assert_raises(ArgumentError) do
+        @worker_pool_class.new(@worker_class, {
+          :num_workers  => [0, (Factory.integer * -1)].choice
+        })
+      end
     end
 
   end
