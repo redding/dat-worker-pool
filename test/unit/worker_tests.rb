@@ -451,6 +451,123 @@ module DatWorkerPool::Worker
 
   end
 
+  class TestHelperTests < UnitTests
+    desc "TestHelpers"
+    setup do
+      @worker_class = TestWorker
+      @options = {
+        :queue         => DatWorkerPool::DefaultQueue.new,
+        :worker_params => { Factory.string => Factory.string }
+      }
+
+      @context_class = Class.new do
+        include DatWorkerPool::Worker::TestHelpers
+      end
+      @context = @context_class.new
+    end
+    subject{ @context }
+
+    should have_imeths :test_runner
+
+    should "build a test runner using `test_runner`" do
+      test_runner = subject.test_runner(@worker_class, @options)
+
+      assert_instance_of TestHelpers::TestRunner, test_runner
+      assert_equal @worker_class,     test_runner.worker_class
+      assert_equal @options[:queue],  test_runner.queue
+      assert_equal @options[:params], test_runner.dwp_runner.worker_params
+    end
+
+  end
+
+  class TestRunnerTests < TestHelperTests
+    desc "TestRunner"
+    setup do
+      @test_runner = TestHelpers::TestRunner.new(@worker_class, @options)
+    end
+    subject{ @test_runner }
+
+    should have_readers :worker_class, :worker
+    should have_readers :queue, :dwp_runner
+    should have_imeths :run, :work, :error
+    should have_imeths :start, :shutdown
+    should have_imeths :sleep, :wakeup
+
+    should "know its attributes" do
+      assert_equal @worker_class, subject.worker_class
+      assert_instance_of @worker_class, subject.worker
+      assert_equal @options[:queue], subject.queue
+    end
+
+    should "build a dat-worker-pool runner" do
+      dwp_runner = subject.dwp_runner
+      assert_instance_of DatWorkerPool::Runner, dwp_runner
+      assert_equal DatWorkerPool::MIN_WORKERS,  dwp_runner.num_workers
+      assert_equal subject.queue,               dwp_runner.queue
+      assert_equal subject.worker_class,        dwp_runner.worker_class
+      assert_equal @options[:params],           dwp_runner.worker_params
+    end
+
+    should "run all of its workers callbacks and its work method using `run`" do
+      work_item = Factory.string
+      subject.run(work_item)
+
+      worker = subject.worker
+      assert_not_nil worker.first_on_start_call_order
+      assert_not_nil worker.first_on_sleep_call_order
+      assert_not_nil worker.first_on_wakeup_call_order
+      assert_not_nil worker.first_on_shutdown_call_order
+
+      assert_equal work_item, worker.before_work_item_worked_on
+      assert_equal work_item, worker.item_worked_on
+      assert_equal work_item, worker.after_work_item_worked_on
+    end
+
+    should "call its workers work method using `work`" do
+      work_item = Factory.string
+      subject.work(work_item)
+
+      worker = subject.worker
+      assert_equal work_item, worker.before_work_item_worked_on
+      assert_equal work_item, worker.item_worked_on
+      assert_equal work_item, worker.after_work_item_worked_on
+    end
+
+    should "call its workers on-error callbacks using `error`" do
+      exception = Factory.exception
+      subject.error(exception)
+
+      worker = subject.worker
+      assert_equal exception, worker.on_error_exception
+      assert_nil worker.on_error_work_item
+
+      work_item = Factory.string
+      subject.error(exception, work_item)
+      assert_equal work_item, worker.on_error_work_item
+    end
+
+    should "call its workers on-start callbacks using `start`" do
+      subject.start
+      assert_not_nil subject.worker.first_on_start_call_order
+    end
+
+    should "call its workers on-shutdown callbacks using `shutdown`" do
+      subject.shutdown
+      assert_not_nil subject.worker.first_on_shutdown_call_order
+    end
+
+    should "call its workers on-sleep callbacks using `sleep`" do
+      subject.sleep
+      assert_not_nil subject.worker.first_on_sleep_call_order
+    end
+
+    should "call its workers on-wakeup callbacks using `wakeup`" do
+      subject.wakeup
+      assert_not_nil subject.worker.first_on_wakeup_call_order
+    end
+
+  end
+
   class TestWorker
     include DatWorkerPool::Worker
 

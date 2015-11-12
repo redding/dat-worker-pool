@@ -1,4 +1,5 @@
 require 'thread'
+require 'dat-worker-pool/runner'
 
 class DatWorkerPool
 
@@ -156,6 +157,75 @@ class DatWorkerPool
       def dwp_run_callback(callback, *args)
         (self.class.send("#{callback}_callbacks") || []).each do |callback|
           self.instance_exec(*args, &callback)
+        end
+      end
+
+    end
+
+    module TestHelpers
+
+      def test_runner(worker_class, options = nil)
+        TestRunner.new(worker_class, options)
+      end
+
+      class TestRunner
+        attr_reader :worker_class, :worker
+        attr_reader :queue, :dwp_runner
+
+        def initialize(worker_class, options = nil)
+          @worker_class = worker_class
+
+          @queue = options[:queue] || begin
+            require 'dat-worker-pool/default_queue'
+            DatWorkerPool::DefaultQueue.new
+          end
+
+          @dwp_runner = DatWorkerPool::Runner.new({
+            :num_workers   => MIN_WORKERS,
+            :queue         => @queue,
+            :worker_class  => @worker_class,
+            :worker_params => options[:params]
+          })
+
+          @worker = worker_class.new(@dwp_runner, @queue)
+        end
+
+        def run(work_item)
+          self.start
+          self.sleep
+          self.wakeup
+          self.work(work_item)
+          self.shutdown
+        end
+
+        def work(work_item)
+          @worker.work(work_item)
+        end
+
+        def error(exception, work_item = nil)
+          run_callback('on_error', @worker, exception, work_item)
+        end
+
+        def start
+          run_callback('on_start', @worker)
+        end
+
+        def shutdown
+          run_callback('on_shutdown', @worker)
+        end
+
+        def sleep
+          run_callback('on_sleep', @worker)
+        end
+
+        def wakeup
+          run_callback('on_wakeup', @worker)
+        end
+
+        private
+
+        def run_callback(callback, worker, *args)
+          worker.instance_eval{ dwp_run_callback(callback, *args) }
         end
       end
 
