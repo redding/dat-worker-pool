@@ -29,19 +29,26 @@ class DatWorkerPool
     # the workers should be told to shutdown before the queue because the queue
     # shutdown will wake them up; a worker popping on a shutdown queue will
     # always get `nil` back and will loop as fast as allowed until its shutdown
-    # flag is flipped, so shutting down the workers then the queue keeps them from
-    # looping as fast as possible; use an until loop instead of each to join all
-    # the workers, while we are joining a worker a different worker can shutdown
-    # and remove itself from the `@workers` array
-    def shutdown(timeout = nil)
+    # flag is flipped, so shutting down the workers then the queue keeps them
+    # from looping as fast as possible; if any kind of standard error or the
+    # expected timeout error (assuming the workers take too long to shutdown) is
+    # raised, force a shutdown; this ensures we shutdown as best as possible
+    # instead of letting ruby kill the threads when the process exits;
+    # non-timeout errors will be re-raised so they can be caught and handled (or
+    # shown when the process exits)
+    def shutdown(timeout = nil, backtrace = nil)
       begin
+        @workers.each(&:dwp_signal_shutdown)
+        @queue.signal_shutdown
         OptionalTimeout.new(timeout) do
-          @workers.each(&:dwp_shutdown)
           @queue.shutdown
-          @workers.first.dwp_join until @workers.empty?
+          wait_for_workers_to_shutdown
         end
-      rescue TimeoutError
-        force_shutdown(timeout, caller)
+      rescue StandardError => exception
+        force_workers_to_shutdown(exception, timeout, backtrace)
+        raise exception
+      rescue TimeoutInterruptError => exception
+        force_workers_to_shutdown(exception, timeout, backtrace)
       end
     end
 
@@ -73,31 +80,67 @@ class DatWorkerPool
 
     # use an until loop instead of each to join all the workers, while we are
     # joining a worker a different worker can shutdown and remove itself from
-    # the `@workers` array; `rescue false` when joining the workers, ruby will
-    # raise any exceptions that aren't handled by a thread when its joined, this
-    # ensures if the hard shutdown is raised and not rescued (for example, in
-    # the workers ensure), then it won't cause the forced shutdown to end
+    # the `@workers` array; rescue when joining the workers, ruby will raise any
+    # exceptions that aren't handled by a thread when its joined, this allows
+    # all the workers to be joined
+    def wait_for_workers_to_shutdown
+      until @workers.empty?
+        worker = @workers.first
+        begin
+          worker.dwp_join
+        rescue StandardError
+          self.remove_worker(worker)
+        end
+      end
+    end
+
+    # use an until loop instead of each to join all the workers, while we are
+    # joining a worker a different worker can shutdown and remove itself from
+    # the `@workers` array; rescue when joining the workers, ruby will raise any
+    # exceptions that aren't handled by a thread when its joined, this ensures
+    # if the hard shutdown is raised and not rescued (for example, in the
+    # workers ensure), then it won't cause the forced shutdown to end
     # prematurely
-    def force_shutdown(timeout, backtrace)
-      error = ShutdownError.new("Timed out shutting down (#{timeout} seconds).")
-      error.set_backtrace(backtrace)
+    def force_workers_to_shutdown(orig_exception, timeout, backtrace)
+      error = build_forced_shutdown_error(orig_exception, timeout, backtrace)
       until @workers.empty?
         worker = @workers.first
         worker.dwp_raise(error)
-        worker.dwp_join rescue false
-        @workers.delete(worker)
+        begin
+          worker.dwp_join
+        rescue StandardError, ShutdownError
+        end
+        self.remove_worker(worker)
+      end
+    end
+
+    def build_forced_shutdown_error(orig_exception, timeout, backtrace)
+      if orig_exception.kind_of?(TimeoutInterruptError)
+        ShutdownError.new("Timed out shutting down (#{timeout} seconds).").tap do |e|
+          e.set_backtrace(backtrace) if backtrace
+        end
+      else
+        ShutdownError.new("Errored while shutting down: #{orig_exception.inspect}").tap do |e|
+          e.set_backtrace(orig_exception.backtrace)
+        end
       end
     end
 
     module OptionalTimeout
       def self.new(seconds, &block)
         if seconds
-          SystemTimer.timeout(seconds, TimeoutError, &block)
+          SystemTimer.timeout(seconds, TimeoutInterruptError, &block)
         else
           block.call
         end
       end
     end
+
+    # this needs to be an `Interrupt` to be sure we don't accidentally catch it
+    # when rescueing exceptions; in the shutdown methods we rescue any errors
+    # from `worker.join`, this will also rescue the timeout error if its a
+    # standard error and will keep it from doing a forced shutdown
+    TimeoutInterruptError = Class.new(Interrupt)
 
     class WorkersWaiting
       attr_reader :count
