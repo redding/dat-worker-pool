@@ -14,29 +14,29 @@ class DatWorkerPool
 
     module ClassMethods
 
-      def on_start_callbacks;    @on_start_callbacks    ||= []; end
-      def on_shutdown_callbacks; @on_shutdown_callbacks ||= []; end
-      def on_sleep_callbacks;    @on_sleep_callbacks    ||= []; end
-      def on_wakeup_callbacks;   @on_wakeup_callbacks   ||= []; end
-      def on_error_callbacks;    @on_error_callbacks    ||= []; end
-      def before_work_callbacks; @before_work_callbacks ||= []; end
-      def after_work_callbacks;  @after_work_callbacks  ||= []; end
+      def on_start_callbacks;       @on_start_callbacks       ||= []; end
+      def on_shutdown_callbacks;    @on_shutdown_callbacks    ||= []; end
+      def on_available_callbacks;   @on_available_callbacks   ||= []; end
+      def on_unavailable_callbacks; @on_unavailable_callbacks ||= []; end
+      def on_error_callbacks;       @on_error_callbacks       ||= []; end
+      def before_work_callbacks;    @before_work_callbacks    ||= []; end
+      def after_work_callbacks;     @after_work_callbacks     ||= []; end
 
-      def on_start(&block);    self.on_start_callbacks    << block; end
-      def on_shutdown(&block); self.on_shutdown_callbacks << block; end
-      def on_sleep(&block);    self.on_sleep_callbacks    << block; end
-      def on_wakeup(&block);   self.on_wakeup_callbacks   << block; end
-      def on_error(&block);    self.on_error_callbacks    << block; end
-      def before_work(&block); self.before_work_callbacks << block; end
-      def after_work(&block);  self.after_work_callbacks  << block; end
+      def on_start(&block);       self.on_start_callbacks       << block; end
+      def on_shutdown(&block);    self.on_shutdown_callbacks    << block; end
+      def on_available(&block);   self.on_available_callbacks   << block; end
+      def on_unavailable(&block); self.on_unavailable_callbacks << block; end
+      def on_error(&block);       self.on_error_callbacks       << block; end
+      def before_work(&block);    self.before_work_callbacks    << block; end
+      def after_work(&block);     self.after_work_callbacks     << block; end
 
-      def prepend_on_start(&block);    self.on_start_callbacks.unshift(block);    end
-      def prepend_on_shutdown(&block); self.on_shutdown_callbacks.unshift(block); end
-      def prepend_on_sleep(&block);    self.on_sleep_callbacks.unshift(block);    end
-      def prepend_on_wakeup(&block);   self.on_wakeup_callbacks.unshift(block);   end
-      def prepend_on_error(&block);    self.on_error_callbacks.unshift(block);    end
-      def prepend_before_work(&block); self.before_work_callbacks.unshift(block); end
-      def prepend_after_work(&block);  self.after_work_callbacks.unshift(block);  end
+      def prepend_on_start(&block);       self.on_start_callbacks.unshift(block);       end
+      def prepend_on_shutdown(&block);    self.on_shutdown_callbacks.unshift(block);    end
+      def prepend_on_available(&block);   self.on_available_callbacks.unshift(block);   end
+      def prepend_on_unavailable(&block); self.on_unavailable_callbacks.unshift(block); end
+      def prepend_on_error(&block);       self.on_error_callbacks.unshift(block);       end
+      def prepend_before_work(&block);    self.before_work_callbacks.unshift(block);    end
+      def prepend_after_work(&block);     self.after_work_callbacks.unshift(block);     end
 
     end
 
@@ -47,12 +47,6 @@ class DatWorkerPool
         @dwp_queue   = queue
         @dwp_running = false
         @dwp_thread  = nil
-      end
-
-      def work(work_item)
-        dwp_run_callback('before_work', work_item)
-        work!(work_item)
-        dwp_run_callback('after_work', work_item)
       end
 
       def dwp_start
@@ -106,13 +100,14 @@ class DatWorkerPool
         dwp_setup
         while self.dwp_running?
           begin
-            work_item = nil
-            @dwp_runner.increment_worker_waiting
-            dwp_run_callback 'on_sleep'
-            work_item = queue.pop
-            dwp_run_callback 'on_wakeup'
-            @dwp_runner.decrement_worker_waiting
-            work(work_item) if !work_item.nil?
+            if !(work_item = queue.pop).nil?
+              begin
+                dwp_make_unavailable
+                dwp_work(work_item)
+              ensure
+                dwp_make_available
+              end
+            end
           rescue ShutdownError => exception
             dwp_handle_exception(exception, work_item) if work_item
             Thread.current.raise exception
@@ -132,6 +127,25 @@ class DatWorkerPool
           dwp_handle_exception(exception)
           Thread.current.raise exception
         end
+      end
+
+      # this is a separate method so the test runner can call it individually
+      def dwp_make_unavailable
+        @dwp_runner.make_worker_unavailable(self)
+        dwp_run_callback 'on_unavailable'
+      end
+
+      # this is a separate method so the test runner can call it individually
+      def dwp_make_available
+        @dwp_runner.make_worker_available(self)
+        dwp_run_callback 'on_available'
+      end
+
+      # this is a separate method so the test runner can call it individually
+      def dwp_work(work_item)
+        dwp_run_callback('before_work', work_item)
+        work!(work_item)
+        dwp_run_callback('after_work', work_item)
       end
 
       def dwp_teardown
@@ -187,40 +201,40 @@ class DatWorkerPool
 
         def run(work_item)
           self.start
-          self.sleep
-          self.wakeup
+          self.make_unavailable
           self.work(work_item)
+          self.make_available
           self.shutdown
         end
 
         def work(work_item)
-          @worker.work(work_item)
+          self.worker.instance_eval{ dwp_work(work_item) }
         end
 
         def error(exception, work_item = nil)
-          run_callback('on_error', @worker, exception, work_item)
+          run_callback('on_error', self.worker, exception, work_item)
         end
 
         def start
-          run_callback('on_start', @worker)
+          run_callback('on_start', self.worker)
         end
 
         def shutdown
-          run_callback('on_shutdown', @worker)
+          run_callback('on_shutdown', self.worker)
         end
 
-        def sleep
-          run_callback('on_sleep', @worker)
+        def make_unavailable
+          self.worker.instance_eval{ dwp_make_unavailable }
         end
 
-        def wakeup
-          run_callback('on_wakeup', @worker)
+        def make_available
+          self.worker.instance_eval{ dwp_make_available }
         end
 
         private
 
         def run_callback(callback, worker, *args)
-          worker.instance_eval{ dwp_run_callback(callback, *args) }
+          self.worker.instance_eval{ dwp_run_callback(callback, *args) }
         end
       end
 
