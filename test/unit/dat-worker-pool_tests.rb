@@ -185,12 +185,12 @@ class DatWorkerPool
     end
 
     def start
-      @args[:queue].start
+      @args[:queue].dwp_start
       @start_called = true
     end
 
     def shutdown(timeout, backtrace)
-      @args[:queue].shutdown
+      @args[:queue].dwp_shutdown
       @shutdown_called    = true
       @shutdown_timeout   = timeout
       @shutdown_backtrace = backtrace

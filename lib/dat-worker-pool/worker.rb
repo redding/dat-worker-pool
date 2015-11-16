@@ -100,7 +100,7 @@ class DatWorkerPool
         dwp_setup
         while self.dwp_running?
           begin
-            if !(work_item = queue.pop).nil?
+            if !(work_item = queue.dwp_pop).nil?
               begin
                 dwp_make_unavailable
                 dwp_work(work_item)

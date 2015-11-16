@@ -231,7 +231,7 @@ class DatWorkerPool::Runner
 
     should "force its workers to shutdown if a non-timeout error occurs" do
       queue_exception = Factory.exception
-      Assert.stub(@queue, :shutdown){ raise queue_exception }
+      Assert.stub(@queue, :dwp_shutdown){ raise queue_exception }
 
       caught_exception = nil
       begin

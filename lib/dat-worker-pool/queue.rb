@@ -10,34 +10,34 @@ class DatWorkerPool
 
     module InstanceMethods
 
-      def start
-        @running = true
+      def dwp_start
+        @dwp_running = true
         start!
       end
 
-      def signal_shutdown
-        @running = false
+      def dwp_signal_shutdown
+        @dwp_running = false
       end
 
-      def shutdown
-        self.signal_shutdown
+      def dwp_shutdown
+        self.dwp_signal_shutdown
         shutdown!
       end
 
       def running?
-        !!@running
+        !!@dwp_running
       end
 
       def shutdown?
         !self.running?
       end
 
-      def push(*args)
+      def dwp_push(*args)
         raise "Unable to add work when shut down" if self.shutdown?
         push!(*args)
       end
 
-      def pop
+      def dwp_pop
         return if self.shutdown?
         pop!
       end

@@ -64,8 +64,8 @@ class DatWorkerPool::DefaultQueue
 
     should "know if its empty or not" do
       assert_true subject.empty?
-      subject.start
-      subject.push(Factory.string)
+      subject.dwp_start
+      subject.dwp_push(Factory.string)
       assert_false subject.empty?
     end
 
@@ -80,24 +80,24 @@ class DatWorkerPool::DefaultQueue
   class StartedTests < InitTests
     desc "and started"
     setup do
-      @queue.start
+      @queue.dwp_start
     end
 
     should "broadcast to all threads when shutdown" do
       assert_false @mutex_spy.synchronize_called
       assert_false @cond_var_spy.broadcast_called
-      subject.shutdown
+      subject.dwp_shutdown
       assert_true @cond_var_spy.broadcast_called
       assert_true @mutex_spy.synchronize_called
     end
 
     should "be able to add work items" do
       work_item = Factory.string
-      subject.push(work_item)
+      subject.dwp_push(work_item)
       assert_equal 1, subject.work_items.size
       assert_equal work_item, subject.work_items.last
 
-      subject.push(work_item)
+      subject.dwp_push(work_item)
       assert_equal 2, subject.work_items.size
       assert_equal work_item, subject.work_items.last
     end
@@ -105,7 +105,7 @@ class DatWorkerPool::DefaultQueue
     should "signal threads waiting on its lock when adding work items" do
       assert_false @mutex_spy.synchronize_called
       assert_false @cond_var_spy.signal_called
-      subject.push(Factory.string)
+      subject.dwp_push(Factory.string)
       assert_true @cond_var_spy.signal_called
       assert_true @mutex_spy.synchronize_called
     end
@@ -119,22 +119,22 @@ class DatWorkerPool::DefaultQueue
       end
 
       work_item = Factory.string
-      subject.push(work_item)
+      subject.dwp_push(work_item)
       assert_equal subject,   on_push_queue
       assert_equal work_item, on_push_work_item
     end
 
     should "be able to pop work items" do
       values = (Factory.integer(3) + 1).times.map{ Factory.string }
-      values.each{ |v| subject.push(v) }
+      values.each{ |v| subject.dwp_push(v) }
 
-      assert_equal values.first, subject.pop
+      assert_equal values.first, subject.dwp_pop
       exp = values - [values.first]
       assert_equal exp, subject.work_items
     end
 
     should "run on pop callbacks when popping work items" do
-      subject.push(Factory.string)
+      subject.dwp_push(Factory.string)
 
       on_pop_queue     = nil
       on_pop_work_item = nil
@@ -143,17 +143,17 @@ class DatWorkerPool::DefaultQueue
         on_pop_work_item = work_item
       end
 
-      popped_work_item = subject.pop
+      popped_work_item = subject.dwp_pop
       assert_equal subject,          on_pop_queue
       assert_equal popped_work_item, on_pop_work_item
     end
 
     should "not run on pop callbacks when there isn't a work item" do
-      subject.push(nil)
+      subject.dwp_push(nil)
 
       on_pop_called = false
       subject.on_pop{ on_pop_called = true }
-      subject.pop
+      subject.dwp_pop
       assert_false on_pop_called
     end
 
@@ -165,7 +165,7 @@ class DatWorkerPool::DefaultQueue
       @on_pop_called = false
       @queue.on_pop{ @on_pop_called = true }
 
-      @thread = Thread.new{ Thread.current['popped_value'] = @queue.pop }
+      @thread = Thread.new{ Thread.current['popped_value'] = @queue.dwp_pop }
     end
     subject{ @thread }
 
@@ -178,7 +178,7 @@ class DatWorkerPool::DefaultQueue
       assert_equal 'sleep', subject.status
 
       value = Factory.string
-      @queue.push(value)
+      @queue.dwp_push(value)
 
       assert_not subject.alive?
       assert_equal value, subject['popped_value']
@@ -202,14 +202,14 @@ class DatWorkerPool::DefaultQueue
       assert_equal 'sleep', subject.status
       assert_equal 1, @cond_var_spy.wait_call_count
 
-      @queue.shutdown
+      @queue.dwp_shutdown
 
       assert_not subject.alive?
       assert_equal 1, @cond_var_spy.wait_call_count
     end
 
     should "not run on pop callbacks when shutdown" do
-      @queue.shutdown
+      @queue.dwp_shutdown
       assert_false @on_pop_called
     end
 
@@ -223,7 +223,7 @@ class DatWorkerPool::DefaultQueue
       # scenario we can't use `push` because it will wakeup the thread; so this
       # accesses the array directly and pushes an item on it
       @queue.instance_variable_get("@work_items") << Factory.string
-      @queue.shutdown
+      @queue.dwp_shutdown
 
       assert_not subject.alive?
       assert_nil subject['popped_value']
