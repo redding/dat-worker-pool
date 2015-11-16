@@ -1,6 +1,7 @@
 require 'assert'
 require 'dat-worker-pool'
 
+require 'dat-worker-pool/locked_object'
 require 'dat-worker-pool/worker'
 
 class DatWorkerPool
@@ -236,21 +237,6 @@ class DatWorkerPool
       end
     end
 
-  end
-
-  class LockedArray
-    def initialize
-      @mutex = Mutex.new
-      @array = []
-    end
-
-    def push(value)
-      @mutex.synchronize{ @array.push(value) }
-    end
-
-    def values
-      @mutex.synchronize{ @array }
-    end
   end
 
 end

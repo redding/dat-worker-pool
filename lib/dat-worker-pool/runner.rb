@@ -1,14 +1,14 @@
 require 'set'
 require 'system_timer'
-require 'thread'
 require 'dat-worker-pool'
+require 'dat-worker-pool/locked_object'
 
 class DatWorkerPool
 
   class Runner
 
     attr_reader :num_workers, :worker_class, :worker_params
-    attr_reader :queue, :workers
+    attr_reader :queue
 
     def initialize(args)
       @num_workers   = args[:num_workers]
@@ -16,10 +16,12 @@ class DatWorkerPool
       @worker_class  = args[:worker_class]
       @worker_params = args[:worker_params]
 
-      @mutex   = Mutex.new
-      @workers = []
+      @workers           = LockedArray.new
+      @available_workers = LockedSet.new
+    end
 
-      @available_workers = AvailableWorkers.new
+    def workers
+      @workers.values
     end
 
     def start
@@ -39,7 +41,7 @@ class DatWorkerPool
     # shown when the process exits)
     def shutdown(timeout = nil, backtrace = nil)
       begin
-        @workers.each(&:dwp_signal_shutdown)
+        @workers.with_lock{ |m, ws| ws.each(&:dwp_signal_shutdown) }
         @queue.dwp_signal_shutdown
         OptionalTimeout.new(timeout) do
           @queue.dwp_shutdown
@@ -54,13 +56,13 @@ class DatWorkerPool
     end
 
     def add_worker(worker)
-      @mutex.synchronize{ @workers.push(worker) }
+      @workers.push(worker)
       self.make_worker_available(worker)
     end
 
     def remove_worker(worker)
       self.make_worker_unavailable(worker)
-      @mutex.synchronize{ @workers.delete(worker) }
+      @workers.delete(worker)
     end
 
     def available_worker_count
@@ -91,8 +93,7 @@ class DatWorkerPool
     # exceptions that aren't handled by a thread when its joined, this allows
     # all the workers to be joined
     def wait_for_workers_to_shutdown
-      until @workers.empty?
-        worker = @workers.first
+      while !(worker = @workers.first).nil?
         begin
           worker.dwp_join
         rescue StandardError
@@ -110,8 +111,7 @@ class DatWorkerPool
     # prematurely
     def force_workers_to_shutdown(orig_exception, timeout, backtrace)
       error = build_forced_shutdown_error(orig_exception, timeout, backtrace)
-      until @workers.empty?
-        worker = @workers.first
+      while !(worker = @workers.first).nil?
         worker.dwp_raise(error)
         begin
           worker.dwp_join
@@ -148,29 +148,6 @@ class DatWorkerPool
     # from `worker.join`, this will also rescue the timeout error if its a
     # standard error and will keep it from doing a forced shutdown
     TimeoutInterruptError = Class.new(Interrupt)
-
-    class AvailableWorkers
-      def initialize
-        @mutex = Mutex.new
-        @set   = Set.new
-      end
-
-      def get
-        @mutex.synchronize{ @set }
-      end
-
-      def size
-        @mutex.synchronize{ @set.size }
-      end
-
-      def add(value)
-        @mutex.synchronize{ @set.add(value) }
-      end
-
-      def remove(value)
-        @mutex.synchronize{ @set.delete(value) }
-      end
-    end
 
   end
 

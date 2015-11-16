@@ -1,4 +1,5 @@
 require 'thread'
+require 'dat-worker-pool/locked_object'
 require 'dat-worker-pool/queue'
 
 class DatWorkerPool
@@ -9,37 +10,31 @@ class DatWorkerPool
     attr_reader :on_push_callbacks, :on_pop_callbacks
 
     def initialize
-      @work_items = []
-      @mutex      = Mutex.new
+      @work_items = LockedArray.new
       @cond_var   = ConditionVariable.new
 
       @on_push_callbacks = []
       @on_pop_callbacks  = []
     end
 
-    def work_items
-      @mutex.synchronize{ @work_items }
-    end
-
-    def empty?
-      @mutex.synchronize{ @work_items.empty? }
-    end
+    def work_items; @work_items.values; end
+    def empty?;     @work_items.empty?; end
 
     def on_push(&block); @on_push_callbacks << block; end
-    def on_pop(&block);  @on_pop_callbacks << block;  end
+    def on_pop(&block);  @on_pop_callbacks  << block; end
 
     private
 
     # wake up workers (`@cond_var.broadcast`) who are sleeping because of `pop`
     def shutdown!
-      @mutex.synchronize{ @cond_var.broadcast }
+      @work_items.with_lock{ @cond_var.broadcast }
     end
 
     # add the work item and wakeup (`@cond_var.signal`) the first sleeping
     # worker (from calling `pop`)
     def push!(work_item)
-      @mutex.synchronize do
-        @work_items << work_item
+      @work_items.with_lock do |mutex, work_items|
+        work_items << work_item
         @cond_var.signal
       end
       @on_push_callbacks.each{ |p| p.call(self, work_item) }
@@ -50,11 +45,11 @@ class DatWorkerPool
     # it from the front and return it; if shutdown, return `nil` which the
     # workers will ignore
     def pop!
-      work_item = @mutex.synchronize do
-        while !self.shutdown? && @work_items.empty?
-          @cond_var.wait(@mutex)
+      work_item = @work_items.with_lock do |mutex, work_items|
+        while !self.shutdown? && work_items.empty?
+          @cond_var.wait(mutex)
         end
-        @work_items.shift unless self.shutdown?
+        work_items.shift unless self.shutdown?
       end
       @on_pop_callbacks.each{ |p| p.call(self, work_item) } if !work_item.nil?
       work_item

@@ -23,8 +23,8 @@ class DatWorkerPool::DefaultQueue
   class InitTests < UnitTests
     desc "when init"
     setup do
-      @mutex_spy = MutexSpy.new
-      Assert.stub(Mutex, :new){ @mutex_spy }
+      @work_items = DatWorkerPool::LockedArray.new
+      Assert.stub(DatWorkerPool::LockedArray, :new){ @work_items }
 
       @cond_var_spy = ConditionVariableSpy.new
       Assert.stub(ConditionVariable, :new){ @cond_var_spy }
@@ -52,27 +52,13 @@ class DatWorkerPool::DefaultQueue
       assert_includes callback, subject.on_pop_callbacks
     end
 
-    should "default its work items" do
-      assert_equal [], subject.work_items
-    end
-
-    should "lock access to its work items" do
-      assert_false @mutex_spy.synchronize_called
-      subject.work_items
-      assert_true @mutex_spy.synchronize_called
-    end
-
-    should "know if its empty or not" do
+    should "know its work items and demeter them" do
+      assert_equal @work_items.values, subject.work_items
       assert_true subject.empty?
-      subject.dwp_start
-      subject.dwp_push(Factory.string)
-      assert_false subject.empty?
-    end
 
-    should "lock access to checking if its empty" do
-      assert_false @mutex_spy.synchronize_called
-      subject.empty?
-      assert_true @mutex_spy.synchronize_called
+      @work_items.push(Factory.string)
+      assert_equal @work_items.values, subject.work_items
+      assert_false subject.empty?
     end
 
   end
@@ -84,11 +70,9 @@ class DatWorkerPool::DefaultQueue
     end
 
     should "broadcast to all threads when shutdown" do
-      assert_false @mutex_spy.synchronize_called
       assert_false @cond_var_spy.broadcast_called
       subject.dwp_shutdown
       assert_true @cond_var_spy.broadcast_called
-      assert_true @mutex_spy.synchronize_called
     end
 
     should "be able to add work items" do
@@ -103,11 +87,9 @@ class DatWorkerPool::DefaultQueue
     end
 
     should "signal threads waiting on its lock when adding work items" do
-      assert_false @mutex_spy.synchronize_called
       assert_false @cond_var_spy.signal_called
       subject.dwp_push(Factory.string)
       assert_true @cond_var_spy.signal_called
-      assert_true @mutex_spy.synchronize_called
     end
 
     should "run on push callbacks when adding work items" do
@@ -171,7 +153,7 @@ class DatWorkerPool::DefaultQueue
 
     should "sleep the thread if empty when popping work items" do
       assert_equal 'sleep', subject.status
-      assert_equal @mutex_spy, @cond_var_spy.wait_called_on
+      assert_equal @work_items.mutex, @cond_var_spy.wait_called_on
     end
 
     should "wakeup the thread (from waiting on pop) when work items are added" do
@@ -192,7 +174,7 @@ class DatWorkerPool::DefaultQueue
       # to the queue, its possible this can happen if another worker never
       # sleeps and grabs the lock and work item before the thread being woken
       # up
-      @mutex_spy.synchronize{ @cond_var_spy.signal }
+      @work_items.with_lock{ @cond_var_spy.signal }
 
       assert_equal 'sleep', subject.status
       assert_equal 2, @cond_var_spy.wait_call_count
@@ -222,7 +204,7 @@ class DatWorkerPool::DefaultQueue
       # this happens we don't want it to pull work off the queue; to set up this
       # scenario we can't use `push` because it will wakeup the thread; so this
       # accesses the array directly and pushes an item on it
-      @queue.instance_variable_get("@work_items") << Factory.string
+      @work_items.push(Factory.string)
       @queue.dwp_shutdown
 
       assert_not subject.alive?
