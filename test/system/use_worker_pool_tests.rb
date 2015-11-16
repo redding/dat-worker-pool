@@ -61,29 +61,32 @@ class DatWorkerPool
     end
 
     should "spawn and wait until work is available" do
-      # the workers should be spawned and waiting
-      assert_equal 2,    subject.waiting
-      assert_equal true, subject.worker_available?
+      # the workers should be spawned and available
+      assert_equal 2, subject.available_worker_count
+      assert_true subject.worker_available?
 
-      # only one worker should be waiting
+      # only one worker should be available
       subject.add_work 5
-      assert_equal 1,    subject.waiting
-      assert_equal true, subject.worker_available?
+      assert_equal 1, subject.available_worker_count
+      assert_true subject.worker_available?
 
-      # neither worker should be waiting now
+      # neither worker should be available now
       subject.add_work 5
-      assert_equal 0,     subject.waiting
-      assert_equal false, subject.worker_available?
+      assert_equal 0, subject.available_worker_count
+      assert_false subject.worker_available?
     end
 
     should "go back to waiting when they finish working" do
-      assert_equal 2, subject.waiting
+      assert_equal 2, subject.available_worker_count
+      assert_true subject.worker_available?
       subject.add_work 1
-      assert_equal 1, subject.waiting
+      subject.add_work 1
+      assert_equal 0, subject.available_worker_count
+      assert_false subject.worker_available?
 
-      sleep 1 # allow the worker to run
-
-      assert_equal 2, subject.waiting
+      sleep 1 # allow the workers to run
+      assert_equal 2, subject.available_worker_count
+      assert_true subject.worker_available?
     end
 
   end
@@ -98,8 +101,8 @@ class DatWorkerPool
         on_start{ params[:callbacks_called][:on_start] = true }
         on_shutdown{ params[:callbacks_called][:on_shutdown] = true }
 
-        on_sleep{ params[:callbacks_called][:on_sleep] = true }
-        on_wakeup{ params[:callbacks_called][:on_wakeup] = true }
+        on_available{ params[:callbacks_called][:on_available] = true }
+        on_unavailable{ params[:callbacks_called][:on_unavailable] = true }
 
         on_error{ |e, wi| params[:callbacks_called][:on_error] = true }
 
@@ -118,35 +121,38 @@ class DatWorkerPool
 
     should "call the worker callbacks as workers wait or wakeup" do
       assert_nil @callbacks_called[:on_start]
-      assert_nil @callbacks_called[:on_sleep]
+      assert_nil @callbacks_called[:on_available]
       subject.start
       assert_true @callbacks_called[:on_start]
-      assert_true @callbacks_called[:on_sleep]
 
-      @callbacks_called.delete(:on_sleep)
-      assert_nil @callbacks_called[:on_wakeup]
+      assert_nil @callbacks_called[:on_unavailable]
       assert_nil @callbacks_called[:before_work]
       assert_nil @callbacks_called[:after_work]
       subject.add_work Factory.string
-      assert_true @callbacks_called[:on_wakeup]
+      assert_true @callbacks_called[:on_unavailable]
       assert_true @callbacks_called[:before_work]
       assert_true @callbacks_called[:after_work]
-      assert_true @callbacks_called[:on_sleep]
+      assert_true @callbacks_called[:on_available]
 
+      @callbacks_called.delete(:on_unavailable)
       @callbacks_called.delete(:before_work)
       @callbacks_called.delete(:after_work)
+      @callbacks_called.delete(:on_available)
+      assert_nil @callbacks_called[:on_unavailable]
       assert_nil @callbacks_called[:before_work]
       assert_nil @callbacks_called[:on_error]
       assert_nil @callbacks_called[:after_work]
+      assert_nil @callbacks_called[:on_available]
       subject.add_work 'error'
+      assert_true @callbacks_called[:on_unavailable]
       assert_true @callbacks_called[:before_work]
       assert_true @callbacks_called[:on_error]
       assert_nil @callbacks_called[:after_work]
+      assert_true @callbacks_called[:on_available]
 
-      @callbacks_called.delete(:on_wakeup)
+      @callbacks_called.delete(:on_unavailable)
       assert_nil @callbacks_called[:on_shutdown]
       subject.shutdown
-      assert_true @callbacks_called[:on_wakeup]
       assert_true @callbacks_called[:on_shutdown]
     end
 
@@ -183,7 +189,7 @@ class DatWorkerPool
       assert_includes     'b', @finished.values
       assert_not_includes 'c', @finished.values
 
-      assert_equal 0, subject.waiting
+      assert_equal 0, subject.available_worker_count
       assert_includes 'c', subject.queue.work_items
     end
 

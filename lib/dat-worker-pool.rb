@@ -51,16 +51,12 @@ class DatWorkerPool
     @queue.push work_item
   end
 
-  def num_workers
-    @runner.num_workers
-  end
-
-  def waiting
-    @runner.workers_waiting_count
+  def available_worker_count
+    @runner.available_worker_count
   end
 
   def worker_available?
-    self.waiting > 0
+    @runner.worker_available?
   end
 
   class NullLogger

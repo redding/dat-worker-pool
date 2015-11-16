@@ -26,6 +26,9 @@ class DatWorkerPool::Runner
       @mutex_spy = MutexSpy.new
       Assert.stub(Mutex, :new){ @mutex_spy }
 
+      @available_workers_spy = AvailableWorkers.new
+      Assert.stub(AvailableWorkers, :new){ @available_workers_spy }
+
       @options = {
         :num_workers   => @num_workers,
         :queue         => @queue,
@@ -42,9 +45,9 @@ class DatWorkerPool::Runner
     should have_readers :num_workers, :worker_class, :worker_params
     should have_readers :queue, :workers
     should have_imeths :start, :shutdown
-    should have_imeths :workers_waiting_count
-    should have_imeths :increment_worker_waiting, :decrement_worker_waiting
     should have_imeths :add_worker, :remove_worker
+    should have_imeths :available_worker_count, :worker_available?
+    should have_imeths :make_worker_available, :make_worker_unavailable
 
     should "know its attributes" do
       assert_equal @num_workers,   subject.num_workers
@@ -55,14 +58,6 @@ class DatWorkerPool::Runner
 
     should "default its workers to an empty array" do
       assert_equal [], subject.workers
-    end
-
-    should "demeter its workers waiting" do
-      assert_equal 0, subject.workers_waiting_count
-      subject.increment_worker_waiting
-      assert_equal 1, subject.workers_waiting_count
-      subject.decrement_worker_waiting
-      assert_equal 0, subject.workers_waiting_count
     end
 
     should "start its queue when its started" do
@@ -96,6 +91,29 @@ class DatWorkerPool::Runner
       assert_true @mutex_spy.synchronize_called
     end
 
+    should "allow making workers available/unavailable" do
+      worker = @worker_class.new(@runner, @queue)
+
+      assert_not_includes worker.object_id, @available_workers_spy.get
+      assert_false subject.worker_available?
+      subject.make_worker_available(worker)
+      assert_includes worker.object_id, @available_workers_spy.get
+      assert_true subject.worker_available?
+      subject.make_worker_unavailable(worker)
+      assert_not_includes worker.object_id, @available_workers_spy.get
+      assert_false subject.worker_available?
+    end
+
+    should "know how many workers are available" do
+      worker = @worker_class.new(@runner, @queue)
+
+      assert_equal 0, subject.available_worker_count
+      subject.make_worker_available(worker)
+      assert_equal 1, subject.available_worker_count
+      subject.make_worker_unavailable(worker)
+      assert_equal 0, subject.available_worker_count
+    end
+
   end
 
   class StartedTests < InitTests
@@ -112,6 +130,7 @@ class DatWorkerPool::Runner
       subject.add_worker(worker)
       assert_true @mutex_spy.synchronize_called
       assert_includes worker, subject.workers
+      assert_includes worker.object_id, @available_workers_spy.get
 
       subject.workers.delete(worker)
     end
@@ -123,6 +142,7 @@ class DatWorkerPool::Runner
       subject.remove_worker(worker)
       assert_true @mutex_spy.synchronize_called
       assert_not_includes worker, subject.workers
+      assert_not_includes worker.object_id, @available_workers_spy.get
     end
 
   end

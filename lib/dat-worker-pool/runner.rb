@@ -1,3 +1,4 @@
+require 'set'
 require 'system_timer'
 require 'thread'
 require 'dat-worker-pool'
@@ -18,7 +19,7 @@ class DatWorkerPool
       @mutex   = Mutex.new
       @workers = []
 
-      @workers_waiting = WorkersWaiting.new
+      @available_workers = AvailableWorkers.new
     end
 
     def start
@@ -52,24 +53,30 @@ class DatWorkerPool
       end
     end
 
-    def workers_waiting_count
-      @workers_waiting.count
-    end
-
-    def increment_worker_waiting
-      @workers_waiting.increment
-    end
-
-    def decrement_worker_waiting
-      @workers_waiting.decrement
-    end
-
     def add_worker(worker)
       @mutex.synchronize{ @workers.push(worker) }
+      self.make_worker_available(worker)
     end
 
     def remove_worker(worker)
+      self.make_worker_unavailable(worker)
       @mutex.synchronize{ @workers.delete(worker) }
+    end
+
+    def available_worker_count
+      @available_workers.size
+    end
+
+    def worker_available?
+      self.available_worker_count > 0
+    end
+
+    def make_worker_available(worker)
+      @available_workers.add(worker.object_id)
+    end
+
+    def make_worker_unavailable(worker)
+      @available_workers.remove(worker.object_id)
     end
 
     private
@@ -142,20 +149,26 @@ class DatWorkerPool
     # standard error and will keep it from doing a forced shutdown
     TimeoutInterruptError = Class.new(Interrupt)
 
-    class WorkersWaiting
-      attr_reader :count
-
+    class AvailableWorkers
       def initialize
         @mutex = Mutex.new
-        @count = 0
+        @set   = Set.new
       end
 
-      def increment
-        @mutex.synchronize{ @count += 1 }
+      def get
+        @mutex.synchronize{ @set }
       end
 
-      def decrement
-        @mutex.synchronize{ @count -= 1 }
+      def size
+        @mutex.synchronize{ @set.size }
+      end
+
+      def add(value)
+        @mutex.synchronize{ @set.add(value) }
+      end
+
+      def remove(value)
+        @mutex.synchronize{ @set.delete(value) }
       end
     end
 

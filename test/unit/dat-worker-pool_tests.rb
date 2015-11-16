@@ -60,7 +60,7 @@ class DatWorkerPool
 
     should have_readers :logger, :queue
     should have_imeths :start, :shutdown, :add_work
-    should have_imeths :num_workers, :waiting, :worker_available?
+    should have_imeths :available_worker_count, :worker_available?
 
     should "know its attributes" do
       assert_equal @logger, subject.logger
@@ -106,8 +106,8 @@ class DatWorkerPool
     end
 
     should "demeter its runner" do
-      assert_equal @runner_spy.num_workers,           subject.num_workers
-      assert_equal @runner_spy.workers_waiting_count, subject.waiting
+      assert_equal @runner_spy.available_worker_count, subject.available_worker_count
+      assert_equal @runner_spy.worker_available?,      subject.worker_available?
     end
 
     should "raise an argument error if given an invalid worker class" do

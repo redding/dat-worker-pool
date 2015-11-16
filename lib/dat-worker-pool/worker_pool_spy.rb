@@ -45,10 +45,6 @@ class DatWorkerPool
       @work_items << work_item
     end
 
-    def waiting
-      @num_workers
-    end
-
     def worker_available?
       !!@worker_available
     end
