@@ -23,7 +23,7 @@ class DatWorkerPool
     end
 
     def start
-      @queue.start
+      @queue.dwp_start
       @num_workers.times{ build_worker }
     end
 
@@ -40,9 +40,9 @@ class DatWorkerPool
     def shutdown(timeout = nil, backtrace = nil)
       begin
         @workers.each(&:dwp_signal_shutdown)
-        @queue.signal_shutdown
+        @queue.dwp_signal_shutdown
         OptionalTimeout.new(timeout) do
-          @queue.shutdown
+          @queue.dwp_shutdown
           wait_for_workers_to_shutdown
         end
       rescue StandardError => exception

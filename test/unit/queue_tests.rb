@@ -29,12 +29,12 @@ module DatWorkerPool::Queue
     end
     subject{ @queue_class }
 
-    should "raise a not implemented error for `push` and `pop` by default" do
+    should "raise a not implemented error for `dwp_push` and `dwp_pop` by default" do
       queue_class = Class.new{ include DatWorkerPool::Queue }
-      queue = queue_class.new.tap(&:start)
+      queue = queue_class.new.tap(&:dwp_start)
 
-      assert_raises(NotImplementedError){ queue.push(Factory.string) }
-      assert_raises(NotImplementedError){ queue.pop }
+      assert_raises(NotImplementedError){ queue.dwp_push(Factory.string) }
+      assert_raises(NotImplementedError){ queue.dwp_pop }
     end
 
   end
@@ -46,80 +46,80 @@ module DatWorkerPool::Queue
     end
     subject{ @queue }
 
-    should have_imeths :start, :signal_shutdown, :shutdown
+    should have_imeths :dwp_start, :dwp_signal_shutdown, :dwp_shutdown
     should have_imeths :running?, :shutdown?
-    should have_imeths :push, :pop
+    should have_imeths :dwp_push, :dwp_pop
 
-    should "set its flags using `start` and `shutdown`" do
+    should "set its flags using `dwp_start` and `dwp_shutdown`" do
       assert_false subject.running?
       assert_true  subject.shutdown?
-      subject.start
+      subject.dwp_start
       assert_true  subject.running?
       assert_false subject.shutdown?
-      subject.shutdown
+      subject.dwp_shutdown
       assert_false subject.running?
       assert_true  subject.shutdown?
     end
 
-    should "call `start!` using `start`" do
+    should "call `start!` using `dwp_start`" do
       assert_false subject.start_called
-      subject.start
+      subject.dwp_start
       assert_true subject.start_called
     end
 
-    should "set its shutdown flag using `signal_shutdown`" do
+    should "set its shutdown flag using `dwp_signal_shutdown`" do
       assert_false subject.running?
       assert_false subject.shutdown_called
-      subject.start
+      subject.dwp_start
       assert_true  subject.running?
       assert_false subject.shutdown_called
-      subject.signal_shutdown
+      subject.dwp_signal_shutdown
       assert_false subject.running?
       assert_false subject.shutdown_called
     end
 
-    should "call `shutdown!` using `shutdown`" do
+    should "call `shutdown!` using `dwp_shutdown`" do
       assert_false subject.shutdown_called
-      subject.shutdown
+      subject.dwp_shutdown
       assert_true subject.shutdown_called
     end
 
-    should "raise an error if `push` is called when the queue isn't running" do
+    should "raise an error if `dwp_push` is called when the queue isn't running" do
       assert_false subject.running?
-      assert_raise(RuntimeError){ subject.push(Factory.string) }
-      subject.start
-      assert_nothing_raised{ subject.push(Factory.string) }
-      subject.shutdown
-      assert_raise(RuntimeError){ subject.push(Factory.string) }
+      assert_raise(RuntimeError){ subject.dwp_push(Factory.string) }
+      subject.dwp_start
+      assert_nothing_raised{ subject.dwp_push(Factory.string) }
+      subject.dwp_shutdown
+      assert_raise(RuntimeError){ subject.dwp_push(Factory.string) }
     end
 
-    should "call `push!` using `push`" do
-      subject.start
+    should "call `push!` using `dwp_push`" do
+      subject.dwp_start
 
       work_item = Factory.string
-      subject.push(work_item)
+      subject.dwp_push(work_item)
       assert_equal [work_item], subject.push_called_with
 
       args = Factory.integer(3).times.map{ Factory.string }
-      subject.push(*args)
+      subject.dwp_push(*args)
       assert_equal args, subject.push_called_with
     end
 
-    should "return nothing if `pop` is called when the queue isn't running" do
+    should "return nothing if `dwp_pop` is called when the queue isn't running" do
       subject.pop_result = Factory.string
       assert_false subject.running?
-      assert_nil subject.pop
-      subject.start
-      assert_not_nil subject.pop
-      subject.shutdown
-      assert_nil subject.pop
+      assert_nil subject.dwp_pop
+      subject.dwp_start
+      assert_not_nil subject.dwp_pop
+      subject.dwp_shutdown
+      assert_nil subject.dwp_pop
     end
 
-    should "call `pop!` using `pop`" do
-      subject.start
+    should "call `pop!` using `dwp_pop`" do
+      subject.dwp_start
       subject.pop_result = Factory.string
 
-      value = subject.pop
+      value = subject.dwp_pop
       assert_equal subject.pop_result, value
     end
 

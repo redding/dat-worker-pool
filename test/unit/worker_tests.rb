@@ -107,7 +107,7 @@ module DatWorkerPool::Worker
 
     def shutdown_worker_queue_and_wait_for_thread_to_stop
       @worker.dwp_signal_shutdown if @worker
-      @queue.shutdown
+      @queue.dwp_shutdown
       wait_for_worker_thread_to_stop
     end
 
@@ -120,7 +120,7 @@ module DatWorkerPool::Worker
   class InitTests < UnitTests
     desc "when init"
     setup do
-      @queue  = DatWorkerPool::DefaultQueue.new.tap(&:start)
+      @queue  = DatWorkerPool::DefaultQueue.new.tap(&:dwp_start)
       @runner = DatWorkerPool::Runner.new(:queue => @queue)
 
       @worker = TestWorker.new(@runner, @queue)
@@ -211,7 +211,7 @@ module DatWorkerPool::Worker
       Assert.stub(@runner, :make_worker_available){ |w| available_worker = w }
 
       subject.dwp_start
-      @queue.push(Factory.string)
+      @queue.dwp_push(Factory.string)
 
       assert_same subject, unavailable_worker
       assert_same subject, available_worker
@@ -219,7 +219,7 @@ module DatWorkerPool::Worker
 
     should "call its on-available and on-unavailable callbacks while running" do
       subject.dwp_start
-      @queue.push(Factory.string)
+      @queue.dwp_push(Factory.string)
 
       assert_not_nil subject.first_on_unavailable_call_order
       assert_not_nil subject.second_on_unavailable_call_order
@@ -239,7 +239,7 @@ module DatWorkerPool::Worker
       subject.send("#{error_method}=", exception)
 
       subject.dwp_start
-      @queue.push(Factory.string)
+      @queue.dwp_push(Factory.string)
 
       assert_equal exception, subject.on_error_exception
       assert_same subject, unavailable_worker
@@ -254,7 +254,7 @@ module DatWorkerPool::Worker
       assert_nil subject.item_worked_on
 
       work_item = Factory.string
-      @queue.push(work_item)
+      @queue.dwp_push(work_item)
       assert_same work_item, subject.before_work_item_worked_on
       assert_same work_item, subject.item_worked_on
       assert_same work_item, subject.after_work_item_worked_on
@@ -263,7 +263,7 @@ module DatWorkerPool::Worker
     should "not call its `work` method if it pops a `nil` work item" do
       subject.dwp_start
 
-      @queue.push(nil)
+      @queue.dwp_push(nil)
       assert_false subject.work_called
 
       # when the queue is shutdown it returns `nil`, so we shouldn't call `work`
@@ -329,7 +329,7 @@ module DatWorkerPool::Worker
       setup_work_loop_to_raise_exception(exception)
       subject.dwp_start
 
-      @queue.push(Factory.string)
+      @queue.dwp_push(Factory.string)
       assert_true subject.dwp_thread_alive?
     end
 
@@ -338,7 +338,7 @@ module DatWorkerPool::Worker
       error_method = setup_work_loop_to_raise_exception(exception)
       subject.dwp_start
       work_item = Factory.string
-      @queue.push(work_item)
+      @queue.dwp_push(work_item)
 
       assert_equal exception, subject.on_error_exception
       assert_equal work_item, subject.on_error_work_item
@@ -348,7 +348,7 @@ module DatWorkerPool::Worker
       exception = Factory.exception(DatWorkerPool::ShutdownError)
       setup_work_loop_to_raise_exception(exception)
       subject.dwp_start
-      @queue.push(Factory.string)
+      @queue.dwp_push(Factory.string)
 
       wait_for_worker_thread_to_stop
       assert_false subject.dwp_thread_alive?
@@ -359,7 +359,7 @@ module DatWorkerPool::Worker
       error_method = setup_work_loop_to_raise_exception(exception)
       subject.dwp_start
       work_item = Factory.string
-      @queue.push(work_item)
+      @queue.dwp_push(work_item)
 
       assert_equal exception, subject.on_error_exception
       assert_equal work_item, subject.on_error_work_item
@@ -389,7 +389,7 @@ module DatWorkerPool::Worker
       assert_nil subject.first_on_available_call_order
       assert_nil subject.second_on_available_call_order
 
-      @queue.push(Factory.string)
+      @queue.dwp_push(Factory.string)
 
       assert_equal 1, subject.first_on_unavailable_call_order
       assert_equal 2, subject.second_on_unavailable_call_order

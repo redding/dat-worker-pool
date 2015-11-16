@@ -48,7 +48,7 @@ class DatWorkerPool
 
   def add_work(work_item)
     return if work_item.nil?
-    @queue.push work_item
+    @queue.dwp_push work_item
   end
 
   def available_worker_count
