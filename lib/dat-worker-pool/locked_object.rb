@@ -33,6 +33,7 @@ class DatWorkerPool
 
     def first;  @mutex.synchronize{ @object.first };  end
     def last;   @mutex.synchronize{ @object.last };   end
+    def size;   @mutex.synchronize{ @object.size };   end
     def empty?; @mutex.synchronize{ @object.empty? }; end
 
     def push(new_item); @mutex.synchronize{ @object.push(new_item) }; end

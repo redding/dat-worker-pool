@@ -71,7 +71,8 @@ class DatWorkerPool::LockedObject
     subject{ @locked_array }
 
     should have_imeths :values
-    should have_imeths :empty?
+    should have_imeths :first, :last
+    should have_imeths :size, :empty?
     should have_imeths :push, :pop
     should have_imeths :shift, :unshift
     should have_imeths :delete
@@ -86,6 +87,41 @@ class DatWorkerPool::LockedObject
 
     should "alias its value method as values" do
       assert_same subject.value, subject.values
+    end
+
+    should "know its first and last items" do
+      assert_nil subject.first
+      assert_nil subject.last
+
+      subject.value.push(Factory.string)
+      subject.value.push(Factory.string)
+
+      assert_equal subject.values.first, subject.first
+      assert_equal subject.values.last,  subject.last
+    end
+
+    should "lock access to getting its first item" do
+      assert_false @mutex_spy.synchronize_called
+      subject.first
+      assert_true @mutex_spy.synchronize_called
+    end
+
+    should "lock access to getting its last item" do
+      assert_false @mutex_spy.synchronize_called
+      subject.last
+      assert_true @mutex_spy.synchronize_called
+    end
+
+    should "know its size" do
+      assert_equal 0, subject.size
+      subject.value.push(Factory.string)
+      assert_equal 1, subject.size
+    end
+
+    should "lock access to reading its size" do
+      assert_false @mutex_spy.synchronize_called
+      subject.size
+      assert_true @mutex_spy.synchronize_called
     end
 
     should "know if its empty or not" do
