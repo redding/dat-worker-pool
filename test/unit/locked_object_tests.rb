@@ -161,7 +161,7 @@ class DatWorkerPool::LockedObject
     end
     subject{ @locked_set }
 
-    should have_imeths :values, :size, :add, :remove
+    should have_imeths :values, :size, :empty?, :add, :remove
 
     should "be a dat-worker-pool locked object" do
       assert DatWorkerPool::LockedSet < DatWorkerPool::LockedObject
@@ -176,7 +176,7 @@ class DatWorkerPool::LockedObject
       assert_same subject.value, subject.values
     end
 
-    should "know size" do
+    should "know its size" do
       assert_equal 0, subject.size
       subject.value.add(Factory.string)
       assert_equal 1, subject.size
@@ -185,6 +185,18 @@ class DatWorkerPool::LockedObject
     should "lock access to reading its size" do
       assert_false @mutex_spy.synchronize_called
       subject.size
+      assert_true @mutex_spy.synchronize_called
+    end
+
+    should "know if its empty or not" do
+      assert_true subject.empty?
+      subject.value.add(Factory.string)
+      assert_false subject.empty?
+    end
+
+    should "lock access to checking if its empty" do
+      assert_false @mutex_spy.synchronize_called
+      subject.empty?
       assert_true @mutex_spy.synchronize_called
     end
 

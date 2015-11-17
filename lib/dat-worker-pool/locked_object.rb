@@ -49,7 +49,9 @@ class DatWorkerPool
 
     alias :values :value
 
-    def size;         @mutex.synchronize{ @object.size };         end
+    def size;   @mutex.synchronize{ @object.size };   end
+    def empty?; @mutex.synchronize{ @object.empty? }; end
+
     def add(item);    @mutex.synchronize{ @object.add(item) };    end
     def remove(item); @mutex.synchronize{ @object.delete(item) }; end
   end
