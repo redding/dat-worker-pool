@@ -55,16 +55,6 @@ class DatWorkerPool
       end
     end
 
-    def add_worker(worker)
-      @workers.push(worker)
-      self.make_worker_available(worker)
-    end
-
-    def remove_worker(worker)
-      self.make_worker_unavailable(worker)
-      @workers.delete(worker)
-    end
-
     def available_worker_count
       @available_workers.size
     end
@@ -84,7 +74,7 @@ class DatWorkerPool
     private
 
     def build_worker
-      @worker_class.new(self, @queue).tap(&:dwp_start)
+      @workers.push(@worker_class.new(self, @queue).tap(&:dwp_start))
     end
 
     # use an until loop instead of each to join all the workers, while we are
@@ -97,8 +87,8 @@ class DatWorkerPool
         begin
           worker.dwp_join
         rescue StandardError
-          self.remove_worker(worker)
         end
+        remove_worker(worker)
       end
     end
 
@@ -117,8 +107,15 @@ class DatWorkerPool
           worker.dwp_join
         rescue StandardError, ShutdownError
         end
-        self.remove_worker(worker)
+        remove_worker(worker)
       end
+    end
+
+    # make sure the worker has been removed from the available workers, in case
+    # it errored before it was able to make itself unavailable
+    def remove_worker(worker)
+      self.make_worker_unavailable(worker)
+      @workers.delete(worker)
     end
 
     def build_forced_shutdown_error(orig_exception, timeout, backtrace)

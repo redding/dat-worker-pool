@@ -120,9 +120,9 @@ class DatWorkerPool
       end
 
       def dwp_setup
-        @dwp_runner.add_worker(self)
         begin
           dwp_run_callback 'on_start'
+          dwp_make_available
         rescue StandardError => exception
           dwp_handle_exception(exception)
           Thread.current.raise exception
@@ -150,11 +150,11 @@ class DatWorkerPool
 
       def dwp_teardown
         begin
+          dwp_make_unavailable
           dwp_run_callback 'on_shutdown'
         rescue StandardError => exception
           dwp_handle_exception(exception)
         end
-        @dwp_runner.remove_worker(self)
         @dwp_running = false
         @dwp_thread  = nil
       end

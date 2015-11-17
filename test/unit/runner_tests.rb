@@ -2,7 +2,6 @@ require 'assert'
 require 'dat-worker-pool/runner'
 
 require 'dat-worker-pool/default_queue'
-require 'test/support/thread_spies'
 
 class DatWorkerPool::Runner
 
@@ -45,7 +44,6 @@ class DatWorkerPool::Runner
     should have_readers :num_workers, :worker_class, :worker_params
     should have_readers :queue, :workers
     should have_imeths :start, :shutdown
-    should have_imeths :add_worker, :remove_worker
     should have_imeths :available_worker_count, :worker_available?
     should have_imeths :make_worker_available, :make_worker_unavailable
 
@@ -68,21 +66,13 @@ class DatWorkerPool::Runner
       assert_true @queue.running?
     end
 
-    should "build workers when its started" do
-      passed_runner = nil
-      passed_queue  = nil
-      workers = @num_workers.times.map{ @worker_class.new(@runner, @queue) }
-      Assert.stub(@worker_class, :new) do |runner, queue|
-        passed_runner = runner
-        passed_queue  = queue
-        workers.pop
-      end
-
+    should "build and add workers when its started" do
       subject.start
 
-      assert_equal subject, passed_runner
-      assert_equal @queue,  passed_queue
+      assert_equal @num_workers, subject.workers.size
       subject.workers.each do |worker|
+        assert_equal subject, worker.dwp_runner
+        assert_equal @queue,  worker.dwp_queue
         assert_true worker.dwp_running?
       end
     end
@@ -108,32 +98,6 @@ class DatWorkerPool::Runner
       assert_equal 1, subject.available_worker_count
       subject.make_worker_unavailable(worker)
       assert_equal 0, subject.available_worker_count
-    end
-
-  end
-
-  class StartedTests < InitTests
-    desc "and started"
-    setup do
-      @runner.start
-    end
-
-    should "add a worker to its workers using `add_worker`" do
-      worker = @worker_class.new(@runner, @queue)
-
-      subject.add_worker(worker)
-      assert_includes worker, subject.workers
-      assert_includes worker.object_id, @available_workers_spy.values
-
-      subject.workers.delete(worker)
-    end
-
-    should "remove a worker from its workers using `remove_worker`" do
-      worker = subject.workers.choice
-
-      subject.remove_worker(worker)
-      assert_not_includes worker, subject.workers
-      assert_not_includes worker.object_id, @available_workers_spy.values
     end
 
   end
@@ -206,7 +170,22 @@ class DatWorkerPool::Runner
       @running_workers.each do |worker|
         assert_true worker.join_called
       end
+    end
+
+    should "remove workers as they finish" do
+      assert_false subject.workers.empty?
+      subject.shutdown(Factory.boolean ? Factory.integer : nil)
       assert_true subject.workers.empty?
+    end
+
+    should "remove workers and make them unavailable even if they error" do
+      @running_workers.each{ |w| w.join_error = Factory.exception }
+
+      assert_false subject.workers.empty?
+      assert_false @available_workers_spy.empty?
+      subject.shutdown(Factory.boolean ? Factory.integer : nil)
+      assert_true subject.workers.empty?
+      assert_true @available_workers_spy.empty?
     end
 
     should "force its workers to shutdown if a timeout error occurs" do
@@ -218,6 +197,7 @@ class DatWorkerPool::Runner
         assert_true worker.join_called
       end
       assert_true subject.workers.empty?
+      assert_true @available_workers_spy.empty?
     end
 
     should "force its workers to shutdown if a non-timeout error occurs" do
@@ -236,6 +216,7 @@ class DatWorkerPool::Runner
         assert_true worker.join_called
       end
       assert_true subject.workers.empty?
+      assert_true @available_workers_spy.empty?
     end
 
     should "force shutdown all of its workers even if one raises an error when joining" do
@@ -249,12 +230,16 @@ class DatWorkerPool::Runner
         assert_true worker.join_called
       end
       assert_true subject.workers.empty?
+      assert_true @available_workers_spy.empty?
     end
 
   end
 
   class TestWorker
     include DatWorkerPool::Worker
+
+    # for testing what is passed to the worker
+    attr_reader :dwp_runner, :dwp_queue
   end
 
   class ShutdownSpyWorker < TestWorker
