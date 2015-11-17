@@ -23,11 +23,11 @@ class DatWorkerPool::Runner
       @worker_class  = TestWorker
       @worker_params = { Factory.string => Factory.string }
 
-      @mutex_spy = MutexSpy.new
-      Assert.stub(Mutex, :new){ @mutex_spy }
+      @workers = DatWorkerPool::LockedArray.new
+      Assert.stub(DatWorkerPool::LockedArray, :new){ @workers }
 
-      @available_workers_spy = AvailableWorkers.new
-      Assert.stub(AvailableWorkers, :new){ @available_workers_spy }
+      @available_workers_spy = DatWorkerPool::LockedSet.new
+      Assert.stub(DatWorkerPool::LockedSet, :new){ @available_workers_spy }
 
       @options = {
         :num_workers   => @num_workers,
@@ -56,8 +56,10 @@ class DatWorkerPool::Runner
       assert_equal @queue,         subject.queue
     end
 
-    should "default its workers to an empty array" do
-      assert_equal [], subject.workers
+    should "know its workers" do
+      assert_equal @workers.values, subject.workers
+      @workers.push(Factory.string)
+      assert_equal @workers.values, subject.workers
     end
 
     should "start its queue when its started" do
@@ -85,22 +87,16 @@ class DatWorkerPool::Runner
       end
     end
 
-    should "lock access to its workers when started" do
-      assert_false @mutex_spy.synchronize_called
-      subject.start
-      assert_true @mutex_spy.synchronize_called
-    end
-
     should "allow making workers available/unavailable" do
       worker = @worker_class.new(@runner, @queue)
 
-      assert_not_includes worker.object_id, @available_workers_spy.get
+      assert_not_includes worker.object_id, @available_workers_spy.values
       assert_false subject.worker_available?
       subject.make_worker_available(worker)
-      assert_includes worker.object_id, @available_workers_spy.get
+      assert_includes worker.object_id, @available_workers_spy.values
       assert_true subject.worker_available?
       subject.make_worker_unavailable(worker)
-      assert_not_includes worker.object_id, @available_workers_spy.get
+      assert_not_includes worker.object_id, @available_workers_spy.values
       assert_false subject.worker_available?
     end
 
@@ -120,17 +116,14 @@ class DatWorkerPool::Runner
     desc "and started"
     setup do
       @runner.start
-      @mutex_spy.synchronize_called = false # reset so we can test it below
     end
 
     should "add a worker to its workers using `add_worker`" do
       worker = @worker_class.new(@runner, @queue)
 
-      assert_false @mutex_spy.synchronize_called
       subject.add_worker(worker)
-      assert_true @mutex_spy.synchronize_called
       assert_includes worker, subject.workers
-      assert_includes worker.object_id, @available_workers_spy.get
+      assert_includes worker.object_id, @available_workers_spy.values
 
       subject.workers.delete(worker)
     end
@@ -138,11 +131,9 @@ class DatWorkerPool::Runner
     should "remove a worker from its workers using `remove_worker`" do
       worker = subject.workers.choice
 
-      assert_false @mutex_spy.synchronize_called
       subject.remove_worker(worker)
-      assert_true @mutex_spy.synchronize_called
       assert_not_includes worker, subject.workers
-      assert_not_includes worker.object_id, @available_workers_spy.get
+      assert_not_includes worker.object_id, @available_workers_spy.values
     end
 
   end
@@ -215,7 +206,7 @@ class DatWorkerPool::Runner
       @running_workers.each do |worker|
         assert_true worker.join_called
       end
-      assert_equal [], subject.workers
+      assert_true subject.workers.empty?
     end
 
     should "force its workers to shutdown if a timeout error occurs" do
@@ -226,7 +217,7 @@ class DatWorkerPool::Runner
         assert_instance_of DatWorkerPool::ShutdownError, worker.raised_error
         assert_true worker.join_called
       end
-      assert_equal [], subject.workers
+      assert_true subject.workers.empty?
     end
 
     should "force its workers to shutdown if a non-timeout error occurs" do
@@ -244,7 +235,7 @@ class DatWorkerPool::Runner
         assert_instance_of DatWorkerPool::ShutdownError, worker.raised_error
         assert_true worker.join_called
       end
-      assert_equal [], subject.workers
+      assert_true subject.workers.empty?
     end
 
     should "force shutdown all of its workers even if one raises an error when joining" do
@@ -257,7 +248,7 @@ class DatWorkerPool::Runner
         assert_instance_of DatWorkerPool::ShutdownError, worker.raised_error
         assert_true worker.join_called
       end
-      assert_equal [], subject.workers
+      assert_true subject.workers.empty?
     end
 
   end
