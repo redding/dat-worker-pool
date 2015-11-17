@@ -20,6 +20,6 @@ Gem::Specification.new do |gem|
 
   gem.add_dependency("SystemTimer", ["~> 1.2"])
 
-  gem.add_development_dependency("assert", ["~> 2.14"])
+  gem.add_development_dependency("assert", ["~> 2.15"])
 
 end
