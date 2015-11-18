@@ -44,6 +44,7 @@ class DatWorkerPool
       return if work_item.nil?
       @work_items << work_item
     end
+    alias :push :add_work
 
     def worker_available?
       !!@worker_available

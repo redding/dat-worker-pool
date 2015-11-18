@@ -50,6 +50,7 @@ class DatWorkerPool
     return if work_item.nil?
     @queue.dwp_push work_item
   end
+  alias :push :add_work
 
   def available_worker_count
     @runner.available_worker_count
