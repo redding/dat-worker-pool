@@ -1,5 +1,44 @@
 require 'thread'
 
+class ThreadSpy
+  attr_reader :join_seconds, :join_called
+  attr_reader :raised_exception
+
+  def initialize(&block)
+    @block    = block
+    @mutex    = Mutex.new
+    @cond_var = ConditionVariable.new
+
+    @join_seconds     = nil
+    @join_called      = false
+    @raised_exception = nil
+
+    @thread = Thread.new do
+      @mutex.synchronize{ @cond_var.wait(@mutex) } if @block.nil?
+      @block.call
+    end
+  end
+
+  def block=(new_block)
+    @block = new_block
+    @mutex.synchronize{ @cond_var.signal }
+  end
+
+  def join(seconds = nil)
+    @join_seconds = seconds
+    @join_called  = true
+    @thread.join(seconds)
+  end
+
+  def raise(exception)
+    @raised_exception = exception
+    @thread.raise(exception)
+  end
+
+  def status; @thread.status; end
+  def alive?; @thread.alive?; end
+end
+
 class MutexSpy < Mutex
   attr_accessor :synchronize_called
 

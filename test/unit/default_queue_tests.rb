@@ -148,6 +148,7 @@ class DatWorkerPool::DefaultQueue
       @queue.on_pop{ @on_pop_called = true }
 
       @thread = Thread.new{ Thread.current['popped_value'] = @queue.dwp_pop }
+      @thread.join(JOIN_SECONDS)
     end
     subject{ @thread }
 

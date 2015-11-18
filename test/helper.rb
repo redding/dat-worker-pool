@@ -13,6 +13,8 @@ ROOT_PATH = Pathname.new(File.expand_path('../..', __FILE__))
 require 'logger'
 TEST_LOGGER = Logger.new(ROOT_PATH.join("log/test.log"))
 
+JOIN_SECONDS = 0.001
+
 require 'test/support/factory'
 
 # TODO: put test helpers here...
