@@ -59,7 +59,7 @@ class DatWorkerPool
     subject{ @worker_pool }
 
     should have_readers :logger, :queue
-    should have_imeths :start, :shutdown, :add_work
+    should have_imeths :start, :shutdown, :add_work, :push
     should have_imeths :available_worker_count, :worker_available?
 
     should "know its attributes" do
@@ -131,13 +131,17 @@ class DatWorkerPool
       @worker_pool.start
     end
 
-    should "push work onto its queue using `add_work`" do
+    should "be able to add work onto its queue`" do
       work_item = Factory.string
       subject.add_work(work_item)
-      assert_equal [work_item], @queue.pushed_work_items
+      assert_equal work_item, @queue.pushed_work_items.last
+
+      work_item = Factory.string
+      subject.push(work_item)
+      assert_equal work_item, @queue.pushed_work_items.last
     end
 
-    should "not push `nil` work onto its queue using `add_work`" do
+    should "not add `nil` work onto its queue" do
       subject.add_work(nil)
       assert_equal [], @queue.pushed_work_items
     end

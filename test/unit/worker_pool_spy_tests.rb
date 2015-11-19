@@ -81,8 +81,11 @@ class DatWorkerPool::WorkerPoolSpy
     should "allow adding work" do
       work_item = Factory.string
       subject.add_work(work_item)
-      assert_equal 1, subject.work_items.size
-      assert_includes work_item, subject.work_items
+      assert_equal work_item, subject.work_items.last
+
+      work_item = Factory.string
+      subject.push(work_item)
+      assert_equal work_item, subject.work_items.last
     end
 
     should "not allow adding `nil` work" do
