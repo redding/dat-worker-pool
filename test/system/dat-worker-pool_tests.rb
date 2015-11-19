@@ -77,8 +77,10 @@ class DatWorkerPool
       wait_for_workers{ @results.size == @work_items.size }
       subject.shutdown(0)
 
-      exp = @work_items.map{ |number| number * 100 }
-      assert_equal exp, @results.values
+      assert_equal @work_items.size, @results.size
+      @work_items.each do |number|
+        assert_includes number * 100, @results.values
+      end
     end
 
   end
@@ -323,7 +325,7 @@ class DatWorkerPool
       # it has no timeout and the workers will never exit on their own (because
       # they are waiting to be signaled by the cond var)
       shutdown_thread = Thread.new{ subject.shutdown }
-      shutdown_thread.join(0.1)
+      shutdown_thread.join(JOIN_SECONDS)
       assert_equal 'sleep', shutdown_thread.status
 
       # allow the workers to finish working
@@ -358,7 +360,7 @@ class DatWorkerPool
       # finishes; this is required otherwise system timer will think we are
       # triggering a deadlock (it's not a deadlock because of the timeout)
       shutdown_thread = Thread.new{ subject.shutdown(0) }
-      shutdown_thread.join(0.1)
+      shutdown_thread.join(JOIN_SECONDS)
       assert_equal 'sleep', shutdown_thread.status
 
       # wait for the workers to get forced to exit

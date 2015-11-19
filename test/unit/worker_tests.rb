@@ -4,6 +4,7 @@ require 'dat-worker-pool/worker'
 require 'system_timer'
 require 'dat-worker-pool/default_queue'
 require 'dat-worker-pool/runner'
+require 'test/support/thread_spies'
 
 module DatWorkerPool::Worker
 
@@ -105,23 +106,33 @@ module DatWorkerPool::Worker
       assert_equal callback, subject.after_work_callbacks.first
     end
 
-    def shutdown_worker_queue_and_wait_for_thread_to_stop
-      @worker.dwp_signal_shutdown if @worker
-      @queue.dwp_shutdown
-      wait_for_worker_thread_to_stop
-    end
-
-    def wait_for_worker_thread_to_stop
-      SystemTimer.timeout(1){ @worker.dwp_join } if @worker
-    end
-
   end
 
   class InitTests < UnitTests
     desc "when init"
     setup do
+      @mutex    = Mutex.new
+      @cond_var = ConditionVariable.new
+
       @queue  = DatWorkerPool::DefaultQueue.new.tap(&:dwp_start)
-      @runner = DatWorkerPool::Runner.new(:queue => @queue)
+      @runner = DatWorkerPool::Runner.new({
+        :logger        => TEST_LOGGER,
+        :queue         => @queue,
+        :worker_params => {
+          :mutex    => @mutex,
+          :cond_var => @cond_var
+        }
+      })
+
+      @thread_spy = ThreadSpy.new
+      Assert.stub(Thread, :new) do |&block|
+        @thread_spy.tap{ |s| s.block = block }
+      end
+
+      @available_worker = nil
+      Assert.stub(@runner, :make_worker_available){ |w| @available_worker = w }
+      @unavailable_worker = nil
+      Assert.stub(@runner, :make_worker_unavailable){ |w| @unavailable_worker = w }
 
       @worker = TestWorker.new(@runner, @queue)
     end
@@ -141,17 +152,17 @@ module DatWorkerPool::Worker
 
     should "start a thread when its started" do
       thread = subject.dwp_start
+      wait_for_worker_to_be_available
 
-      assert_instance_of Thread, thread
+      assert_same @thread_spy, thread
       assert_true thread.alive?
     end
 
     should "make itself available when started" do
-      available_worker = nil
-      Assert.stub(@runner, :make_worker_available){ |w| available_worker = w }
       subject.dwp_start
+      wait_for_worker_to_be_available
 
-      assert_same subject, available_worker
+      assert_same subject, @available_worker
       assert_not_nil subject.first_on_available_call_order
       assert_not_nil subject.second_on_available_call_order
     end
@@ -161,12 +172,14 @@ module DatWorkerPool::Worker
       assert_false subject.dwp_thread_alive?
 
       subject.dwp_start
+      wait_for_worker_to_be_available
+
       assert_true subject.dwp_running?
       assert_true subject.dwp_thread_alive?
 
       subject.dwp_signal_shutdown
       assert_false subject.dwp_running?
-      assert_true subject.dwp_thread_alive?
+      assert_true  subject.dwp_thread_alive?
 
       shutdown_worker_queue_and_wait_for_thread_to_stop
       assert_false subject.dwp_running?
@@ -174,56 +187,52 @@ module DatWorkerPool::Worker
     end
 
     should "make itself unavailable when its thread stops" do
-      unavailable_worker = nil
-      Assert.stub(@runner, :make_worker_unavailable){ |w| unavailable_worker = w }
       subject.dwp_start
+      wait_for_worker_to_be_available
 
       shutdown_worker_queue_and_wait_for_thread_to_stop
-      assert_same subject, unavailable_worker
+      assert_same subject, @unavailable_worker
       assert_not_nil subject.first_on_unavailable_call_order
       assert_not_nil subject.second_on_unavailable_call_order
     end
 
     should "allow joining and raising on its thread" do
-      thread_spy = ThreadSpy.new
-      Assert.stub(Thread, :new){ thread_spy }
-
       subject.dwp_start
+      wait_for_worker_to_be_available
 
-      subject.dwp_join
-      assert_nil thread_spy.join_seconds
-      assert_true thread_spy.join_called
-
-      seconds = Factory.integer
-      subject.dwp_join(seconds)
-      assert_equal seconds, thread_spy.join_seconds
+      subject.dwp_join(0.1)
+      assert_equal 0.1, @thread_spy.join_seconds
+      assert_true @thread_spy.join_called
 
       exception = Factory.exception
       subject.dwp_raise(exception)
-      assert_equal exception, thread_spy.raised_exception
+      assert_equal exception, @thread_spy.raised_exception
     end
 
     should "not allow joining or raising if it hasn't been started" do
       assert_nothing_raised{ subject.dwp_join(Factory.integer) }
+      assert_false @thread_spy.join_called
       assert_nothing_raised{ subject.dwp_raise(Factory.exception) }
+      assert_nil @thread_spy.raised_exception
     end
 
     should "make itself available and unavailable while running" do
-      unavailable_worker = nil
-      Assert.stub(@runner, :make_worker_unavailable){ |w| unavailable_worker = w }
-      available_worker = nil
-      Assert.stub(@runner, :make_worker_available){ |w| available_worker = w }
-
       subject.dwp_start
-      @queue.dwp_push(Factory.string)
+      wait_for_worker_to_be_available
 
-      assert_same subject, unavailable_worker
-      assert_same subject, available_worker
+      @queue.dwp_push(Factory.string)
+      wait_for_worker_to_work_and_then_be_available
+
+      assert_same subject, @unavailable_worker
+      assert_same subject, @available_worker
     end
 
     should "call its on-available and on-unavailable callbacks while running" do
       subject.dwp_start
+      wait_for_worker_to_be_available
+
       @queue.dwp_push(Factory.string)
+      wait_for_worker_to_work_and_then_be_available
 
       assert_not_nil subject.first_on_unavailable_call_order
       assert_not_nil subject.second_on_unavailable_call_order
@@ -232,33 +241,34 @@ module DatWorkerPool::Worker
     end
 
     should "make itself available/unavailable and run callbacks if it errors" do
-      unavailable_worker = nil
-      Assert.stub(@runner, :make_worker_unavailable){ |w| unavailable_worker = w }
-      available_worker = nil
-      Assert.stub(@runner, :make_worker_available){ |w| available_worker = w }
-
       # these are the only errors that could interfere with it
       error_method = [:on_unavailable_error, :work_error].choice
       exception = Factory.exception
       subject.send("#{error_method}=", exception)
 
       subject.dwp_start
+      wait_for_worker_to_be_available
+
       @queue.dwp_push(Factory.string)
+      wait_for_worker_to_error_and_then_be_available
 
       assert_equal exception, subject.on_error_exception
-      assert_same subject, unavailable_worker
+      assert_same subject, @unavailable_worker
       assert_not_nil subject.first_on_unavailable_call_order
-      assert_same subject, available_worker
+      assert_same subject, @available_worker
       assert_not_nil subject.first_on_available_call_order
     end
 
     should "call its `work` method on any pushed items while running" do
       assert_nil subject.item_worked_on
       subject.dwp_start
+      wait_for_worker_to_be_available
       assert_nil subject.item_worked_on
 
       work_item = Factory.string
       @queue.dwp_push(work_item)
+      wait_for_worker_to_work_and_then_be_available
+
       assert_same work_item, subject.before_work_item_worked_on
       assert_same work_item, subject.item_worked_on
       assert_same work_item, subject.after_work_item_worked_on
@@ -266,8 +276,12 @@ module DatWorkerPool::Worker
 
     should "not call its `work` method if it pops a `nil` work item" do
       subject.dwp_start
+      wait_for_worker_to_be_available
 
       @queue.dwp_push(nil)
+      # we don't have any event to listen for because it should ignore `nil`
+      # work items
+      @thread_spy.join(JOIN_SECONDS)
       assert_false subject.work_called
 
       # when the queue is shutdown it returns `nil`, so we shouldn't call `work`
@@ -280,7 +294,9 @@ module DatWorkerPool::Worker
       exception = Factory.exception
       error_method = [:on_start_error, :on_available_error].choice
       subject.send("#{error_method}=", exception)
+
       subject.dwp_start
+      wait_for_worker_thread_to_stop_and_rescue_if_expected_error(exception)
 
       assert_equal exception, subject.on_error_exception
       assert_nil subject.on_error_work_item
@@ -290,9 +306,10 @@ module DatWorkerPool::Worker
       exception = Factory.exception
       error_method = [:on_start_error, :on_available_error].choice
       subject.send("#{error_method}=", exception)
-      subject.dwp_start
 
-      wait_for_worker_thread_to_stop
+      subject.dwp_start
+      wait_for_worker_thread_to_stop_and_rescue_if_expected_error(exception)
+
       assert_false subject.dwp_thread_alive?
       assert_false subject.dwp_running?
     end
@@ -301,29 +318,37 @@ module DatWorkerPool::Worker
       exception = Factory.exception
       error_method = [:on_shutdown_error, :on_unavailable_error].choice
       subject.send("#{error_method}=", exception)
+
       subject.dwp_start
-      shutdown_worker_queue_and_wait_for_thread_to_stop
+      shutdown_worker_and_queue
+      wait_for_worker_thread_to_stop_and_rescue_if_expected_error(exception)
 
       assert_equal exception, subject.on_error_exception
       assert_nil subject.on_error_work_item
     end
 
     should "not stop its thread when an error occurs while running" do
+      subject.dwp_start
+      wait_for_worker_to_be_available
+
       exception = Factory.exception
       setup_work_loop_to_raise_exception(exception)
-      subject.dwp_start
 
       @queue.dwp_push(Factory.string)
+      wait_for_worker_to_error_and_then_be_available
+
       assert_true subject.dwp_thread_alive?
     end
 
     should "run its on-error callbacks if an error occurs while running" do
       exception = Factory.exception
       subject.dwp_start
+      wait_for_worker_to_be_available
 
       error_method = setup_work_loop_to_raise_exception(exception)
       work_item = Factory.string
       @queue.dwp_push(work_item)
+      wait_for_worker_to_error_and_then_be_available
 
       assert_equal exception, subject.on_error_exception
       assert_equal work_item, subject.on_error_work_item
@@ -332,21 +357,24 @@ module DatWorkerPool::Worker
     should "stop its thread when a shutdown error is raised while running" do
       exception = Factory.exception(DatWorkerPool::ShutdownError)
       subject.dwp_start
+      wait_for_worker_to_be_available
 
       setup_work_loop_to_raise_exception(exception)
       @queue.dwp_push(Factory.string)
 
-      wait_for_worker_thread_to_stop
+      wait_for_worker_thread_to_stop_and_rescue_if_expected_error(exception)
       assert_false subject.dwp_thread_alive?
     end
 
     should "only run its on-error callbacks when shutdown error is raised with a work item" do
       exception = Factory.exception(DatWorkerPool::ShutdownError)
       subject.dwp_start
+      wait_for_worker_to_be_available
 
       error_method = setup_work_loop_to_raise_exception(exception)
       work_item = Factory.string
       @queue.dwp_push(work_item)
+      wait_for_worker_thread_to_stop_and_rescue_if_expected_error(exception)
 
       assert_equal exception, subject.on_error_exception
       assert_equal work_item, subject.on_error_work_item
@@ -359,6 +387,7 @@ module DatWorkerPool::Worker
       assert_nil subject.second_on_available_call_order
 
       subject.dwp_start
+      wait_for_worker_to_be_available
 
       assert_equal 1, subject.first_on_start_call_order
       assert_equal 2, subject.second_on_start_call_order
@@ -368,6 +397,7 @@ module DatWorkerPool::Worker
 
     should "run its callbacks when work is pushed" do
       subject.dwp_start
+      wait_for_worker_to_be_available
       subject.reset_call_order
 
       assert_nil subject.first_on_unavailable_call_order
@@ -381,6 +411,7 @@ module DatWorkerPool::Worker
       assert_nil subject.second_on_available_call_order
 
       @queue.dwp_push(Factory.string)
+      wait_for_worker_to_work_and_then_be_available
 
       assert_equal 1, subject.first_on_unavailable_call_order
       assert_equal 2, subject.second_on_unavailable_call_order
@@ -395,6 +426,7 @@ module DatWorkerPool::Worker
 
     should "run callbacks when its shutdown" do
       subject.dwp_start
+      wait_for_worker_to_be_available
       subject.reset_call_order
 
       assert_nil subject.first_on_unavailable_call_order
@@ -423,15 +455,79 @@ module DatWorkerPool::Worker
       error_method
     end
 
+    # this could loop forever so ensure it doesn't by using a timeout; use
+    # timeout instead of system timer because system timer is paranoid about a
+    # deadlock even though its intended to prevent the deadlock because it times
+    # out the block
+    def wait_for_worker(&block)
+      Timeout.timeout(1) do
+        @mutex.synchronize{ @cond_var.wait(@mutex) } while !block.call
+      end
+    end
+
+    def wait_for_worker_to_be_available
+      wait_for_worker{ @worker.first_on_available_call_order }
+    end
+
+    def wait_for_worker_to_work_and_then_be_available
+      wait_for_worker do
+        @worker.work_called && @worker.first_on_available_call_order
+      end
+    end
+
+    def wait_for_worker_to_error_and_then_be_available
+      wait_for_worker do
+        @worker.on_error_exception && @worker.first_on_available_call_order
+      end
+    end
+
+    def shutdown_worker_queue_and_wait_for_thread_to_stop
+      shutdown_worker_and_queue
+      wait_for_worker_thread_to_stop
+    end
+
+    def shutdown_worker_and_queue
+      @worker.dwp_signal_shutdown
+      @queue.dwp_shutdown
+    end
+
+    def wait_for_worker_thread_to_stop
+      return unless @worker.dwp_thread_alive?
+      Timeout.timeout(1){ @worker.dwp_join }
+    end
+
+    # this is needed because errors will be re-raised when the thread is joined
+    # and in some cases we expect these errors because we are manually raising
+    # them, this checks if they are the expected exception and won't re-raise
+    # them; to check if they are the expected exception, we have to use the
+    # class and message because when the thread raises an error on join it is a
+    # different instance with a different backtrace (so we can't use `==`)
+    def wait_for_worker_thread_to_stop_and_rescue_if_expected_error(exception)
+      begin
+        wait_for_worker_thread_to_stop
+      rescue exception.class => caught_exception
+        unless caught_exception.class   == exception.class &&
+               caught_exception.message == exception.message
+          raise(caught_exception)
+        end
+      end
+    end
+
   end
 
   class TestHelperTests < UnitTests
     desc "TestHelpers"
     setup do
+      @mutex    = Mutex.new
+      @cond_var = ConditionVariable.new
+
       @worker_class = TestWorker
       @options = {
-        :queue         => DatWorkerPool::DefaultQueue.new,
-        :worker_params => { Factory.string => Factory.string }
+        :queue  => DatWorkerPool::DefaultQueue.new,
+        :params => {
+          :mutex    => @mutex,
+          :cond_var => @cond_var
+        }
       }
 
       @context_class = Class.new do
@@ -615,6 +711,9 @@ module DatWorkerPool::Worker
       @on_error_work_item = work_item
     end
 
+    on_available{   signal_test_suite_thread }
+    on_error{       signal_test_suite_thread }
+
     def work_called; !!@work_called; end
 
     def reset_call_order
@@ -653,28 +752,10 @@ module DatWorkerPool::Worker
         Thread.current.raise error
       end
     end
-  end
 
-  class ThreadSpy
-    attr_reader :join_seconds, :join_called
-    attr_reader :raised_exception
-
-    def initialize
-      @join_seconds     = nil
-      @join_called      = false
-      @raised_exception = nil
+    def signal_test_suite_thread
+      params[:mutex].synchronize{ params[:cond_var].signal }
     end
-
-    def join(seconds = nil)
-      @join_seconds = seconds
-      @join_called  = true
-    end
-
-    def raise(exception)
-      @raised_exception = exception
-    end
-
-    def alive?; true; end
   end
 
 end
