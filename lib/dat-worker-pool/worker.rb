@@ -104,13 +104,15 @@ class DatWorkerPool
               begin
                 dwp_make_unavailable
                 dwp_work(work_item)
+              rescue ShutdownError => exception
+                dwp_handle_exception(exception, work_item)
+                Thread.current.raise exception
+              rescue StandardError => exception
+                dwp_handle_exception(exception, work_item)
               ensure
                 dwp_make_available
               end
             end
-          rescue ShutdownError => exception
-            dwp_handle_exception(exception, work_item) if work_item
-            Thread.current.raise exception
           rescue StandardError => exception
             dwp_handle_exception(exception, work_item)
           end
@@ -160,7 +162,13 @@ class DatWorkerPool
       end
 
       def dwp_handle_exception(exception, work_item = nil)
-        dwp_run_callback('on_error', exception, work_item)
+        begin
+          dwp_run_callback('on_error', exception, work_item)
+        rescue StandardError
+          # errors while running on-error callbacks are ignored to keep the
+          # worker from crashing, ideally these should be caught by the on-error
+          # callbacks themselves and never get here
+        end
       end
 
       def dwp_run_callback(callback, *args)
