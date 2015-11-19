@@ -10,6 +10,12 @@ class DatWorkerPool
 
     module InstanceMethods
 
+      # overwrite this method to add custom logic for reading the current work
+      # items on the queue
+      def work_items
+        raise NotImplementedError
+      end
+
       def dwp_start
         @dwp_running = true
         start!
