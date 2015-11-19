@@ -26,7 +26,7 @@ class DatWorkerPool
     desc "when init"
     setup do
       @num_workers   = Factory.integer(4)
-      @logger        = NullLogger.new
+      @logger        = TEST_LOGGER
       @queue         = TestQueue.new
       @worker_params = { Factory.string => Factory.string }
 
@@ -58,19 +58,19 @@ class DatWorkerPool
     end
     subject{ @worker_pool }
 
-    should have_readers :logger, :queue
+    should have_readers :queue
     should have_imeths :start, :shutdown
     should have_imeths :add_work, :push, :work_items
     should have_imeths :available_worker_count, :worker_available?
 
     should "know its attributes" do
-      assert_equal @logger, subject.logger
       assert_equal @queue,  subject.queue
     end
 
     should "build a runner" do
       exp = {
         :num_workers   => @num_workers,
+        :logger        => @logger,
         :queue         => @queue,
         :worker_class  => @worker_class,
         :worker_params => @worker_params
@@ -80,7 +80,6 @@ class DatWorkerPool
 
     should "default its attributes" do
       worker_pool = @worker_pool_class.new(@worker_class)
-      assert_instance_of NullLogger, worker_pool.logger
       assert_instance_of DatWorkerPool::DefaultQueue, worker_pool.queue
 
       assert_equal DEFAULT_NUM_WORKERS, @runner_spy.args[:num_workers]
@@ -151,17 +150,6 @@ class DatWorkerPool
       Factory.integer(3).times{ @queue.dwp_push(Factory.string) }
       assert_equal @queue.work_items, subject.work_items
     end
-
-  end
-
-  class NullLoggerTests < UnitTests
-    desc "NullLogger"
-    setup do
-      @logger = NullLogger.new
-    end
-    subject{ @logger }
-
-    should have_imeths :debug, :info, :error
 
   end
 

@@ -11,7 +11,10 @@ require 'pathname'
 ROOT_PATH = Pathname.new(File.expand_path('../..', __FILE__))
 
 require 'logger'
-TEST_LOGGER = Logger.new(ROOT_PATH.join("log/test.log"))
+TEST_LOGGER = if ENV['DEBUG']
+  # don't show datetime in the logs
+  Logger.new(ROOT_PATH.join("log/test.log")).tap{ |l| l.datetime_format = '' }
+end
 
 JOIN_SECONDS = 0.001
 

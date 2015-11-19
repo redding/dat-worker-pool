@@ -22,7 +22,7 @@ class DatWorkerPool::WorkerPoolSpy
       @worker_class = Class.new{ include DatWorkerPool::Worker }
       @options = {
         :num_workers   => Factory.integer,
-        :logger        => DatWorkerPool::NullLogger.new,
+        :logger        => TEST_LOGGER,
         :queue         => DatWorkerPool::DefaultQueue.new,
         :worker_params => { Factory.string => Factory.string }
       }

@@ -123,6 +123,7 @@ module DatWorkerPool::Worker
           :cond_var => @cond_var
         }
       })
+      @number = Factory.integer(10)
 
       @thread_spy = ThreadSpy.new
       Assert.stub(Thread, :new) do |&block|
@@ -134,20 +135,22 @@ module DatWorkerPool::Worker
       @unavailable_worker = nil
       Assert.stub(@runner, :make_worker_unavailable){ |w| @unavailable_worker = w }
 
-      @worker = TestWorker.new(@runner, @queue)
+      @worker = TestWorker.new(@runner, @queue, @number)
     end
     teardown do
       shutdown_worker_queue_and_wait_for_thread_to_stop
     end
     subject{ @worker }
 
+    should have_readers :dwp_number
     should have_imeths :dwp_start, :dwp_signal_shutdown
     should have_imeths :dwp_running?, :dwp_shutdown?
     should have_imeths :dwp_thread_alive?, :dwp_join, :dwp_raise
 
     should "know its queue and params" do
-      assert_equal @queue,                subject.instance_eval{ queue }
+      assert_equal @number,               subject.instance_eval{ number }
       assert_equal @runner.worker_params, subject.instance_eval{ params }
+      assert_equal @queue,                subject.instance_eval{ queue }
     end
 
     should "start a thread when its started" do
@@ -519,7 +522,7 @@ module DatWorkerPool::Worker
 
       subject.on_available_error = Factory.exception
       @queue.dwp_push(Factory.string)
-      wait_for_worker_to_work_and_then_be_available
+      wait_for_worker_to_error_and_then_be_available
 
       assert_equal 1, subject.first_on_unavailable_call_order
       assert_equal 2, subject.second_on_unavailable_call_order
@@ -614,6 +617,7 @@ module DatWorkerPool::Worker
 
       @worker_class = TestWorker
       @options = {
+        :logger => TEST_LOGGER || Logger.new("/dev/null"),
         :queue  => DatWorkerPool::DefaultQueue.new,
         :params => {
           :mutex    => @mutex,
@@ -661,8 +665,7 @@ module DatWorkerPool::Worker
     should have_imeths :make_unavailable, :make_available
 
     should "know its attributes" do
-      assert_equal @worker_class, subject.worker_class
-      assert_instance_of @worker_class, subject.worker
+      assert_equal @worker_class,    subject.worker_class
       assert_equal @options[:queue], subject.queue
     end
 
@@ -671,8 +674,14 @@ module DatWorkerPool::Worker
       assert_instance_of DatWorkerPool::Runner, dwp_runner
       assert_equal DatWorkerPool::MIN_WORKERS,  dwp_runner.num_workers
       assert_equal subject.queue,               dwp_runner.queue
+      assert_equal @options[:logger],           dwp_runner.logger_proxy.logger
       assert_equal subject.worker_class,        dwp_runner.worker_class
       assert_equal @options[:params],           dwp_runner.worker_params
+    end
+
+    should "build a worker" do
+      assert_instance_of @worker_class, subject.worker
+      assert_equal 1, subject.worker.dwp_number
     end
 
     should "run a workers life-cycle using `run`" do
@@ -772,6 +781,7 @@ module DatWorkerPool::Worker
     end
 
     on_available{ @first_on_available_call_order = next_call_order }
+    on_available{ signal_test_suite_thread }
     on_available do
       raise_error_if_set(:on_available)
       @second_on_available_call_order = next_call_order
@@ -798,15 +808,15 @@ module DatWorkerPool::Worker
     end
 
     on_error do |exception, work_item|
-      @on_error_exception = exception
-      @on_error_work_item = work_item
-
+      @on_error_exception  = exception
+      @on_error_work_item  = work_item
+    end
+    on_error{ signal_test_suite_thread }
+    on_error do
       raise_error_if_set(:on_error)
       @on_error_call_order = next_call_order
     end
 
-    on_available{ signal_test_suite_thread }
-    on_error{     signal_test_suite_thread }
 
     def work_called; !!@work_called; end
 

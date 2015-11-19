@@ -17,7 +17,9 @@ class DatWorkerPool::Runner
   class InitTests < UnitTests
     desc "when init"
     setup do
-      @num_workers   = Factory.integer(4)
+      # at least 2 workers, up to 4
+      @num_workers   = Factory.integer(3) + 1
+      @logger        = TEST_LOGGER || Logger.new("/dev/null")
       @queue         = DatWorkerPool::DefaultQueue.new
       @worker_class  = TestWorker
       @worker_params = { Factory.string => Factory.string }
@@ -30,6 +32,7 @@ class DatWorkerPool::Runner
 
       @options = {
         :num_workers   => @num_workers,
+        :logger        => @logger,
         :queue         => @queue,
         :worker_class  => @worker_class,
         :worker_params => @worker_params
@@ -37,21 +40,31 @@ class DatWorkerPool::Runner
       @runner = @runner_class.new(@options)
     end
     teardown do
-      subject.shutdown(0) rescue false
+      @runner.shutdown(0) rescue false
     end
     subject{ @runner }
 
     should have_readers :num_workers, :worker_class, :worker_params
-    should have_readers :queue, :workers
-    should have_imeths :start, :shutdown
+    should have_readers :logger_proxy, :queue
+    should have_imeths :workers, :start, :shutdown
     should have_imeths :available_worker_count, :worker_available?
     should have_imeths :make_worker_available, :make_worker_unavailable
+    should have_imeths :worker_log
 
     should "know its attributes" do
       assert_equal @num_workers,   subject.num_workers
       assert_equal @worker_class,  subject.worker_class
       assert_equal @worker_params, subject.worker_params
       assert_equal @queue,         subject.queue
+
+      assert_instance_of LoggerProxy, subject.logger_proxy
+      assert_equal @logger, subject.logger_proxy.logger
+    end
+
+    should "default its logger" do
+      @options.delete(:logger)
+      runner = @runner_class.new(@options)
+      assert_instance_of NullLoggerProxy, runner.logger_proxy
     end
 
     should "know its workers" do
@@ -70,15 +83,16 @@ class DatWorkerPool::Runner
       subject.start
 
       assert_equal @num_workers, subject.workers.size
-      subject.workers.each do |worker|
+      subject.workers.each_with_index do |worker, n|
         assert_equal subject, worker.dwp_runner
         assert_equal @queue,  worker.dwp_queue
+        assert_equal n + 1,   worker.dwp_number
         assert_true worker.dwp_running?
       end
     end
 
     should "allow making workers available/unavailable" do
-      worker = @worker_class.new(@runner, @queue)
+      worker = @worker_class.new(@runner, @queue, Factory.integer(10))
 
       assert_not_includes worker.object_id, @available_workers_spy.values
       assert_false subject.worker_available?
@@ -91,13 +105,39 @@ class DatWorkerPool::Runner
     end
 
     should "know how many workers are available" do
-      worker = @worker_class.new(@runner, @queue)
+      worker = @worker_class.new(@runner, @queue, Factory.integer(10))
 
       assert_equal 0, subject.available_worker_count
       subject.make_worker_available(worker)
       assert_equal 1, subject.available_worker_count
       subject.make_worker_unavailable(worker)
       assert_equal 0, subject.available_worker_count
+    end
+
+    should "allow logging messages using `log`" do
+      logged_message = nil
+      Assert.stub(subject.logger_proxy, :runner_log) do |&mb|
+        logged_message = mb.call
+      end
+
+      text = Factory.text
+      subject.log{ text }
+      assert_equal text, logged_message
+    end
+
+    should "allow workers to log messages using `worker_log`" do
+      passed_worker  = nil
+      logged_message = nil
+      Assert.stub(subject.logger_proxy, :worker_log) do |w, &mb|
+        passed_worker  = w
+        logged_message = mb.call
+      end
+      worker = @worker_class.new(@runner, @queue, Factory.integer(10))
+
+      text = Factory.text
+      subject.worker_log(worker){ text }
+      assert_same worker, passed_worker
+      assert_equal text, logged_message
     end
 
   end
@@ -235,12 +275,56 @@ class DatWorkerPool::Runner
 
   end
 
+  class LoggerProxyTests < UnitTests
+    desc "LoggerProxy"
+    setup do
+      @stringio     = StringIO.new
+      @logger       = Logger.new(@stringio)
+      @logger_proxy = LoggerProxy.new(@logger)
+    end
+    subject{ @logger_proxy }
+
+    should have_readers :logger
+    should have_imeths :runner_log, :worker_log
+
+    should "know its logger" do
+      assert_equal @logger, subject.logger
+    end
+
+    should "log a message block for a runner using `runner_log`" do
+      text = Factory.text
+      subject.runner_log{ text }
+      assert_match "[DWP] #{text}", @stringio.string
+    end
+
+    should "log a message block for a worker using `worker_log`" do
+      worker = FakeWorker.new(Factory.integer(10))
+      text   = Factory.text
+      subject.worker_log(worker){ text }
+      assert_match "[DWP-#{worker.dwp_number}] #{text}", @stringio.string
+    end
+
+  end
+
+  class NullLoggerProxyTests < UnitTests
+    desc "NullLoggerProxy"
+    setup do
+      @null_logger_proxy = NullLoggerProxy.new
+    end
+    subject{ @null_logger_proxy }
+
+    should have_imeths :runner_log, :worker_log
+
+  end
+
   class TestWorker
     include DatWorkerPool::Worker
 
     # for testing what is passed to the worker
     attr_reader :dwp_runner, :dwp_queue
   end
+
+  FakeWorker = Struct.new(:dwp_number)
 
   class ShutdownSpyWorker < TestWorker
     attr_reader :join_called

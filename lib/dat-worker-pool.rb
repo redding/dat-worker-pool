@@ -10,7 +10,7 @@ class DatWorkerPool
   DEFAULT_NUM_WORKERS = 1
   MIN_WORKERS         = 1
 
-  attr_reader :logger, :queue
+  attr_reader :queue
 
   def initialize(worker_class, options = nil)
     if !worker_class.kind_of?(Class) || !worker_class.include?(DatWorkerPool::Worker)
@@ -23,8 +23,6 @@ class DatWorkerPool
       raise ArgumentError, "number of workers must be at least #{MIN_WORKERS}"
     end
 
-    @logger = options[:logger] || NullLogger.new
-
     @queue = options[:queue] || begin
       require 'dat-worker-pool/default_queue'
       DatWorkerPool::DefaultQueue.new
@@ -32,6 +30,7 @@ class DatWorkerPool
 
     @runner = DatWorkerPool::Runner.new({
       :num_workers   => num_workers,
+      :logger        => options[:logger],
       :queue         => @queue,
       :worker_class  => worker_class,
       :worker_params => options[:worker_params]
@@ -62,12 +61,6 @@ class DatWorkerPool
 
   def worker_available?
     @runner.worker_available?
-  end
-
-  class NullLogger
-    ::Logger::Severity.constants.each do |name|
-      define_method(name.downcase){ |*args| } # no-op
-    end
   end
 
   # this error should never be "swallowed", if it is caught be sure to re-raise
