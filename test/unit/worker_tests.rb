@@ -345,13 +345,27 @@ module DatWorkerPool::Worker
       subject.dwp_start
       wait_for_worker_to_be_available
 
-      error_method = setup_work_loop_to_raise_exception(exception)
+      setup_work_loop_to_raise_exception(exception)
       work_item = Factory.string
       @queue.dwp_push(work_item)
       wait_for_worker_to_error_and_then_be_available
 
       assert_equal exception, subject.on_error_exception
       assert_equal work_item, subject.on_error_work_item
+    end
+
+    should "not stop its thread if an error occurs in an on-error callback" do
+      exception = Factory.exception
+      subject.dwp_start
+      wait_for_worker_to_be_available
+
+      setup_work_loop_to_raise_exception(Factory.exception)
+      subject.on_error_error = exception
+      work_item = Factory.string
+      @queue.dwp_push(work_item)
+      wait_for_worker_to_error_and_then_be_available
+
+      assert_true subject.dwp_thread_alive?
     end
 
     should "stop its thread when a shutdown error is raised while running" do
@@ -366,12 +380,26 @@ module DatWorkerPool::Worker
       assert_false subject.dwp_thread_alive?
     end
 
+    should "stop its thread when a shutdown error is raised in an on-error callback" do
+      exception = Factory.exception(DatWorkerPool::ShutdownError)
+      subject.dwp_start
+      wait_for_worker_to_be_available
+
+      setup_work_loop_to_raise_exception(Factory.exception)
+      subject.on_error_error = exception
+      @queue.dwp_push(Factory.string)
+
+      wait_for_worker_thread_to_stop_and_rescue_if_expected_error(exception)
+      assert_false subject.dwp_thread_alive?
+    end
+
     should "only run its on-error callbacks when shutdown error is raised with a work item" do
       exception = Factory.exception(DatWorkerPool::ShutdownError)
       subject.dwp_start
       wait_for_worker_to_be_available
 
-      error_method = setup_work_loop_to_raise_exception(exception)
+      error_method = ERROR_METHODS.reject{ |e| e == :on_available_error }.choice
+      subject.send("#{error_method}=", exception)
       work_item = Factory.string
       @queue.dwp_push(work_item)
       wait_for_worker_thread_to_stop_and_rescue_if_expected_error(exception)
@@ -440,6 +468,69 @@ module DatWorkerPool::Worker
       assert_equal 2, subject.second_on_unavailable_call_order
       assert_equal 3, subject.first_on_shutdown_call_order
       assert_equal 4, subject.second_on_shutdown_call_order
+    end
+
+    should "run its callbacks when an error occurs while making itself unavailable" do
+      subject.dwp_start
+      wait_for_worker_to_be_available
+      subject.reset_call_order
+
+      subject.on_unavailable_error = Factory.exception
+      @queue.dwp_push(Factory.string)
+      wait_for_worker_to_error_and_then_be_available
+
+      assert_equal 1, subject.first_on_unavailable_call_order
+      assert_equal 2, subject.on_error_call_order
+      assert_equal 3, subject.first_on_available_call_order
+      assert_equal 4, subject.second_on_available_call_order
+      assert_nil subject.second_on_unavailable_call_order
+      assert_nil subject.first_before_work_call_order
+      assert_nil subject.second_before_work_call_order
+      assert_nil subject.work_call_order
+      assert_nil subject.first_after_work_call_order
+      assert_nil subject.second_after_work_call_order
+    end
+
+    should "run its callbacks when an error occurs while working" do
+      subject.dwp_start
+      wait_for_worker_to_be_available
+      subject.reset_call_order
+
+      subject.work_error = Factory.exception
+      @queue.dwp_push(Factory.string)
+      wait_for_worker_to_error_and_then_be_available
+
+      assert_equal 1, subject.first_on_unavailable_call_order
+      assert_equal 2, subject.second_on_unavailable_call_order
+      assert_equal 3, subject.first_before_work_call_order
+      assert_equal 4, subject.second_before_work_call_order
+      assert_equal 5, subject.on_error_call_order
+      assert_equal 6, subject.first_on_available_call_order
+      assert_equal 7, subject.second_on_available_call_order
+      assert_nil subject.work_call_order
+      assert_nil subject.first_after_work_call_order
+      assert_nil subject.second_after_work_call_order
+    end
+
+    should "run its callbacks when an error occurs while making itself available" do
+      subject.dwp_start
+      wait_for_worker_to_be_available
+      subject.reset_call_order
+
+      subject.on_available_error = Factory.exception
+      @queue.dwp_push(Factory.string)
+      wait_for_worker_to_work_and_then_be_available
+
+      assert_equal 1, subject.first_on_unavailable_call_order
+      assert_equal 2, subject.second_on_unavailable_call_order
+      assert_equal 3, subject.first_before_work_call_order
+      assert_equal 4, subject.second_before_work_call_order
+      assert_equal 5, subject.work_call_order
+      assert_equal 6, subject.first_after_work_call_order
+      assert_equal 7, subject.second_after_work_call_order
+      assert_equal 8, subject.first_on_available_call_order
+      assert_equal 9, subject.on_error_call_order
+      assert_nil subject.second_on_available_call_order
     end
 
     ERROR_METHODS = [
@@ -656,7 +747,7 @@ module DatWorkerPool::Worker
     attr_reader :first_on_unavailable_call_order, :second_on_unavailable_call_order
     attr_reader :first_before_work_call_order, :second_before_work_call_order
     attr_reader :first_after_work_call_order, :second_after_work_call_order
-    attr_reader :work_call_order
+    attr_reader :work_call_order, :on_error_call_order
 
     attr_reader :before_work_item_worked_on, :after_work_item_worked_on
     attr_reader :item_worked_on
@@ -664,7 +755,7 @@ module DatWorkerPool::Worker
     attr_accessor :on_start_error, :on_shutdown_error
     attr_accessor :on_available_error, :on_unavailable_error
     attr_accessor :before_work_error, :after_work_error
-    attr_accessor :work_error
+    attr_accessor :work_error, :on_error_error
 
     attr_reader :on_error_exception, :on_error_work_item
 
@@ -709,10 +800,13 @@ module DatWorkerPool::Worker
     on_error do |exception, work_item|
       @on_error_exception = exception
       @on_error_work_item = work_item
+
+      raise_error_if_set(:on_error)
+      @on_error_call_order = next_call_order
     end
 
-    on_available{   signal_test_suite_thread }
-    on_error{       signal_test_suite_thread }
+    on_available{ signal_test_suite_thread }
+    on_error{     signal_test_suite_thread }
 
     def work_called; !!@work_called; end
 
