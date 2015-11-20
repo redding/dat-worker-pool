@@ -59,7 +59,8 @@ class DatWorkerPool
     subject{ @worker_pool }
 
     should have_readers :logger, :queue
-    should have_imeths :start, :shutdown, :add_work, :push
+    should have_imeths :start, :shutdown
+    should have_imeths :add_work, :push, :work_items
     should have_imeths :available_worker_count, :worker_available?
 
     should "know its attributes" do
@@ -134,16 +135,21 @@ class DatWorkerPool
     should "be able to add work onto its queue`" do
       work_item = Factory.string
       subject.add_work(work_item)
-      assert_equal work_item, @queue.pushed_work_items.last
+      assert_equal work_item, @queue.work_items.last
 
       work_item = Factory.string
       subject.push(work_item)
-      assert_equal work_item, @queue.pushed_work_items.last
+      assert_equal work_item, @queue.work_items.last
     end
 
     should "not add `nil` work onto its queue" do
       subject.add_work(nil)
-      assert_equal [], @queue.pushed_work_items
+      assert_equal [], @queue.work_items
+    end
+
+    should "know its queue's work items" do
+      Factory.integer(3).times{ @queue.dwp_push(Factory.string) }
+      assert_equal @queue.work_items, subject.work_items
     end
 
   end
@@ -162,16 +168,16 @@ class DatWorkerPool
   class TestQueue
     include DatWorkerPool::Queue
 
-    attr_reader :pushed_work_items
+    attr_reader :work_items
 
     def initialize
-      @pushed_work_items = []
+      @work_items = []
     end
 
     private
 
     def push!(work_item)
-      @pushed_work_items << work_item
+      @work_items << work_item
     end
   end
 

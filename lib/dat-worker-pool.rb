@@ -52,6 +52,10 @@ class DatWorkerPool
   end
   alias :push :add_work
 
+  def work_items
+    @queue.work_items
+  end
+
   def available_worker_count
     @runner.available_worker_count
   end

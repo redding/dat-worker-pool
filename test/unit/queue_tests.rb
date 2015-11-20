@@ -46,9 +46,14 @@ module DatWorkerPool::Queue
     end
     subject{ @queue }
 
+    should have_imeths :work_items
     should have_imeths :dwp_start, :dwp_signal_shutdown, :dwp_shutdown
     should have_imeths :running?, :shutdown?
     should have_imeths :dwp_push, :dwp_pop
+
+    should "raise a not implemented error using `work_items`" do
+      assert_raises(NotImplementedError){ subject.work_items }
+    end
 
     should "set its flags using `dwp_start` and `dwp_shutdown`" do
       assert_false subject.running?
