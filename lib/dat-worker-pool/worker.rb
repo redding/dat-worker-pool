@@ -42,9 +42,10 @@ class DatWorkerPool
 
     module InstanceMethods
 
-      def initialize(runner, queue)
-        @dwp_runner  = runner
-        @dwp_queue   = queue
+      attr_reader :dwp_number
+
+      def initialize(runner, queue, number)
+        @dwp_runner, @dwp_queue, @dwp_number = runner, queue, number
         @dwp_running = false
         @dwp_thread  = nil
       end
@@ -85,6 +86,7 @@ class DatWorkerPool
       private
 
       # Helpers
+      def number; @dwp_number;               end
       def params; @dwp_runner.worker_params; end
       def queue;  @dwp_runner.queue;         end
 
@@ -122,6 +124,7 @@ class DatWorkerPool
       end
 
       def dwp_setup
+        dwp_log{ "Starting" }
         begin
           dwp_run_callback 'on_start'
           dwp_make_available
@@ -135,16 +138,19 @@ class DatWorkerPool
       def dwp_make_unavailable
         @dwp_runner.make_worker_unavailable(self)
         dwp_run_callback 'on_unavailable'
+        dwp_log{ "Unavailable" }
       end
 
       # this is a separate method so the test runner can call it individually
       def dwp_make_available
         @dwp_runner.make_worker_available(self)
         dwp_run_callback 'on_available'
+        dwp_log{ "Available" }
       end
 
       # this is a separate method so the test runner can call it individually
       def dwp_work(work_item)
+        dwp_log{ "Working, item: #{work_item.inspect}" }
         dwp_run_callback('before_work', work_item)
         work!(work_item)
         dwp_run_callback('after_work', work_item)
@@ -157,17 +163,20 @@ class DatWorkerPool
         rescue StandardError => exception
           dwp_handle_exception(exception)
         end
+        dwp_log{ "Shutdown" }
         @dwp_running = false
         @dwp_thread  = nil
       end
 
       def dwp_handle_exception(exception, work_item = nil)
         begin
+          dwp_log_exception(exception)
           dwp_run_callback('on_error', exception, work_item)
-        rescue StandardError
-          # errors while running on-error callbacks are ignored to keep the
-          # worker from crashing, ideally these should be caught by the on-error
-          # callbacks themselves and never get here
+        rescue StandardError => on_error_exception
+          # errors while running on-error callbacks are logged but otherwise
+          # ignored to keep the worker from crashing, ideally these should be
+          # caught by the on-error callbacks themselves and never get here
+          dwp_log_exception(on_error_exception)
         end
       end
 
@@ -175,6 +184,15 @@ class DatWorkerPool
         (self.class.send("#{callback}_callbacks") || []).each do |callback|
           self.instance_exec(*args, &callback)
         end
+      end
+
+      def dwp_log(&message_block)
+        @dwp_runner.worker_log(self, &message_block)
+      end
+
+      def dwp_log_exception(exception)
+        dwp_log{ "#{exception.class}: #{exception.message}" }
+        (exception.backtrace || []).each{ |l| dwp_log{ l } }
       end
 
     end
@@ -199,12 +217,13 @@ class DatWorkerPool
 
           @dwp_runner = DatWorkerPool::Runner.new({
             :num_workers   => MIN_WORKERS,
+            :logger        => options[:logger],
             :queue         => @queue,
             :worker_class  => @worker_class,
             :worker_params => options[:params]
           })
 
-          @worker = worker_class.new(@dwp_runner, @queue)
+          @worker = worker_class.new(@dwp_runner, @queue, 1)
         end
 
         def run(work_item)
