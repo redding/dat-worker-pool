@@ -8,8 +8,8 @@ Gem::Specification.new do |gem|
   gem.version     = DatWorkerPool::VERSION
   gem.authors     = ["Collin Redding", "Kelly Redding"]
   gem.email       = ["collin.redding@me.com", "kelly@kellyredding.com"]
-  gem.description = "A simple thread pool for processing generic 'work'"
   gem.summary     = "A simple thread pool for processing generic 'work'"
+  gem.description = "A simple thread pool for processing generic 'work'"
   gem.homepage    = "http://github.com/redding/dat-worker-pool"
   gem.license     = 'MIT'
 
@@ -18,8 +18,8 @@ Gem::Specification.new do |gem|
   gem.test_files    = gem.files.grep(%r{^(test|spec|features)/})
   gem.require_paths = ["lib"]
 
-  gem.add_dependency("SystemTimer", ["~> 1.2"])
+  gem.add_development_dependency("assert", ["~> 2.15.1"])
 
-  gem.add_development_dependency("assert", ["~> 2.15"])
+  gem.add_dependency("SystemTimer", ["~> 1.2"])
 
 end
