@@ -118,7 +118,7 @@ class DatWorkerPool
     should "raise an argument error if given an invalid number of workers" do
       assert_raises(ArgumentError) do
         @worker_pool_class.new(@worker_class, {
-          :num_workers  => [0, (Factory.integer * -1)].choice
+          :num_workers  => [0, (Factory.integer * -1)].sample
         })
       end
     end

@@ -20,4 +20,11 @@ JOIN_SECONDS = 0.001
 
 require 'test/support/factory'
 
-# TODO: put test helpers here...
+# 1.8.7 backfills
+
+# Array#sample
+if !(a = Array.new).respond_to?(:sample) && a.respond_to?(:choice)
+  class Array
+    alias_method :sample, :choice
+  end
+end

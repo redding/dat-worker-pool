@@ -245,7 +245,7 @@ module DatWorkerPool::Worker
 
     should "make itself available/unavailable and run callbacks if it errors" do
       # these are the only errors that could interfere with it
-      error_method = [:on_unavailable_error, :work_error].choice
+      error_method = [:on_unavailable_error, :work_error].sample
       exception = Factory.exception
       subject.send("#{error_method}=", exception)
 
@@ -295,7 +295,7 @@ module DatWorkerPool::Worker
 
     should "run its on-error callbacks if it errors while starting" do
       exception = Factory.exception
-      error_method = [:on_start_error, :on_available_error].choice
+      error_method = [:on_start_error, :on_available_error].sample
       subject.send("#{error_method}=", exception)
 
       subject.dwp_start
@@ -307,7 +307,7 @@ module DatWorkerPool::Worker
 
     should "stop its thread if it errors while starting" do
       exception = Factory.exception
-      error_method = [:on_start_error, :on_available_error].choice
+      error_method = [:on_start_error, :on_available_error].sample
       subject.send("#{error_method}=", exception)
 
       subject.dwp_start
@@ -319,7 +319,7 @@ module DatWorkerPool::Worker
 
     should "run its on-error callbacks if it errors while shutting down" do
       exception = Factory.exception
-      error_method = [:on_shutdown_error, :on_unavailable_error].choice
+      error_method = [:on_shutdown_error, :on_unavailable_error].sample
       subject.send("#{error_method}=", exception)
 
       subject.dwp_start
@@ -401,7 +401,7 @@ module DatWorkerPool::Worker
       subject.dwp_start
       wait_for_worker_to_be_available
 
-      error_method = ERROR_METHODS.reject{ |e| e == :on_available_error }.choice
+      error_method = ERROR_METHODS.reject{ |e| e == :on_available_error }.sample
       subject.send("#{error_method}=", exception)
       work_item = Factory.string
       @queue.dwp_push(work_item)
@@ -544,7 +544,7 @@ module DatWorkerPool::Worker
       :after_work_error
     ].freeze
     def setup_work_loop_to_raise_exception(exception)
-      error_method = ERROR_METHODS.choice
+      error_method = ERROR_METHODS.sample
       @worker.send("#{error_method}=", exception)
       error_method
     end

@@ -205,7 +205,7 @@ class DatWorkerPool::Runner
     end
 
     should "join all workers even if one raises an error when joined" do
-      @running_workers.choice.join_error = Factory.exception
+      @running_workers.sample.join_error = Factory.exception
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
       @running_workers.each do |worker|
         assert_true worker.join_called
@@ -262,7 +262,7 @@ class DatWorkerPool::Runner
     should "force shutdown all of its workers even if one raises an error when joining" do
       Assert.stub(OptionalTimeout, :new){ raise TimeoutInterruptError }
       error_class = Factory.boolean ? DatWorkerPool::ShutdownError : RuntimeError
-      @running_workers.choice.join_error = Factory.exception(error_class)
+      @running_workers.sample.join_error = Factory.exception(error_class)
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
 
       @running_workers.each do |worker|
