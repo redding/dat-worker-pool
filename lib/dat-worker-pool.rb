@@ -42,7 +42,7 @@ class DatWorkerPool
   end
 
   def shutdown(timeout = nil)
-    @runner.shutdown(timeout, caller)
+    @runner.shutdown(timeout)
   end
 
   def add_work(work_item)

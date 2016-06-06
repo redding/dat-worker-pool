@@ -1,7 +1,6 @@
 require 'assert'
 require 'dat-worker-pool/worker'
 
-require 'system_timer'
 require 'dat-worker-pool/default_queue'
 require 'dat-worker-pool/runner'
 require 'test/support/thread_spies'

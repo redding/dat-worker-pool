@@ -351,7 +351,7 @@ class DatWorkerPool
       assert_false shutdown_thread.alive?
     end
 
-    should "allow any work that has been picked up to finish processing " \
+    should "not allow any work that has been picked up to finish processing " \
            "when forced to shutdown because it timed out" do
       assert_true @finished.empty?
       assert_true @errored.empty?
@@ -361,7 +361,7 @@ class DatWorkerPool
       # triggering a deadlock (it's not a deadlock because of the timeout)
       shutdown_thread = Thread.new{ subject.shutdown(0) }
       shutdown_thread.join(JOIN_SECONDS)
-      assert_equal 'sleep', shutdown_thread.status
+      assert_false shutdown_thread.status
 
       # wait for the workers to get forced to exit
       wait_for_workers{ @errored.size == @num_workers }
