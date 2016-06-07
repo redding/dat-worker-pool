@@ -1,6 +1,7 @@
 require 'assert'
 require 'dat-worker-pool/runner'
 
+require 'much-timeout'
 require 'dat-worker-pool/default_queue'
 
 class DatWorkerPool::Runner
@@ -152,10 +153,10 @@ class DatWorkerPool::Runner
       @timeout_seconds         = nil
       @optional_timeout_called = false
       # this acts as a spy but also keeps the shutdown from ever timing out
-      Assert.stub(OptionalTimeout, :new) do |secs, &block|
+      Assert.stub(MuchTimeout, :just_optional_timeout) do |secs, args|
         @timeout_seconds         = secs
         @optional_timeout_called = true
-        block.call
+        args[:do].call
       end
 
       @options[:worker_class] = ShutdownSpyWorker
@@ -229,7 +230,9 @@ class DatWorkerPool::Runner
     end
 
     should "force its workers to shutdown if a timeout error occurs" do
-      Assert.stub(OptionalTimeout, :new){ raise TimeoutInterruptError }
+      Assert.stub(MuchTimeout, :just_optional_timeout) do |secs, args|
+        args[:on_timeout].call # force an immediate timeout
+      end
       subject.shutdown(Factory.integer)
 
       @running_workers.each do |worker|
@@ -260,7 +263,9 @@ class DatWorkerPool::Runner
     end
 
     should "force shutdown all of its workers even if one raises an error when joining" do
-      Assert.stub(OptionalTimeout, :new){ raise TimeoutInterruptError }
+      Assert.stub(MuchTimeout, :just_optional_timeout) do |secs, args|
+        args[:on_timeout].call # force an immediate timeout
+      end
       error_class = Factory.boolean ? DatWorkerPool::ShutdownError : RuntimeError
       @running_workers.sample.join_error = Factory.exception(error_class)
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
