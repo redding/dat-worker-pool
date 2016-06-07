@@ -1,58 +1,24 @@
 require 'assert'
 require 'dat-worker-pool'
 
-require 'timeout'
 require 'dat-worker-pool/locked_object'
 require 'dat-worker-pool/worker'
+require 'test/support/signal_test_worker'
 
 class DatWorkerPool
 
   class SystemTests < Assert::Context
+    include SignalTestWorker::TestHelpers
+
     desc "DatWorkerPool"
-    setup do
-      # at least 2 workers, up to 4
-      @num_workers   = Factory.integer(3) + 1
-      @mutex         = Mutex.new
-      @cond_var      = ConditionVariable.new
-      @worker_params = {
-        :mutex    => @mutex,
-        :cond_var => @cond_var
-      }
-    end
     subject{ @worker_pool }
-
-    # this could loop forever so ensure it doesn't by using a timeout; use
-    # timeout instead of system timer because system timer is paranoid about a
-    # deadlock even though its intended to prevent the deadlock because it times
-    # out the block
-    def wait_for_workers(&block)
-      Timeout.timeout(1) do
-        @mutex.synchronize{ @cond_var.wait(@mutex) } while !block.call
-      end
-    end
-
-    def wait_for_workers_to_become_available
-      wait_for_workers{ @worker_pool.available_worker_count == @num_workers }
-    end
-
-    def wait_for_workers_to_become_unavailable
-      wait_for_workers{ @worker_pool.available_worker_count == 0 }
-    end
-
-    def wait_for_a_worker_to_become_available
-      wait_for_workers{ @worker_pool.available_worker_count != 0 }
-    end
-
-    def wait_for_a_worker_to_become_unavailable
-      wait_for_workers{ @worker_pool.available_worker_count != @num_workers }
-    end
 
   end
 
   class StartAddProcessAndShutdownTests < SystemTests
     setup do
       @worker_class = Class.new do
-        include SystemTestWorker
+        include SignalTestWorker
         def work!(number)
           params[:results].push(number * 100)
           signal_test_suite_thread
@@ -88,17 +54,20 @@ class DatWorkerPool
   class WorkerAvailabilityTests < SystemTests
     setup do
       @worker_class = Class.new do
-        include SystemTestWorker
+        include SignalTestWorker
         on_available{   signal_test_suite_thread }
         on_unavailable{ signal_test_suite_thread }
 
         # this allows controlling how many workers are available and unavailable
         # the worker will be unavailable until we signal it
         def work!(work_item)
+          params[:working].add(self)
           mutex, cond_var = work_item
           mutex.synchronize{ cond_var.wait(mutex) }
+          params[:working].remove(self)
         end
       end
+      @working       = LockedSet.new
       @work_mutex    = Mutex.new
       @work_cond_var = ConditionVariable.new
       @work_item     = [@work_mutex, @work_cond_var]
@@ -106,7 +75,7 @@ class DatWorkerPool
       @worker_pool = DatWorkerPool.new(@worker_class, {
         :num_workers   => @num_workers,
         :logger        => TEST_LOGGER,
-        :worker_params => @worker_params
+        :worker_params => @worker_params.merge(:working => @working)
       })
       @worker_pool.start
     end
@@ -131,7 +100,7 @@ class DatWorkerPool
       # make the rest of the workers unavailable
       (@num_workers - 1).times{ subject.add_work(@work_item) }
 
-      wait_for_workers_to_become_unavailable
+      wait_for_workers{ @working.size == @num_workers }
       assert_equal 0, subject.available_worker_count
       assert_false subject.worker_available?
 
@@ -155,7 +124,7 @@ class DatWorkerPool
   class WorkerCallbackTests < SystemTests
     setup do
       @worker_class = Class.new do
-        include SystemTestWorker
+        include SignalTestWorker
 
         on_start{    params[:callbacks_called][:on_start]    = true }
         on_shutdown{ params[:callbacks_called][:on_shutdown] = true }
@@ -269,7 +238,7 @@ class DatWorkerPool
   class ShutdownSystemTests < SystemTests
     setup do
       @worker_class = Class.new do
-        include SystemTestWorker
+        include SignalTestWorker
         on_available{   signal_test_suite_thread }
         on_unavailable{ signal_test_suite_thread }
 
@@ -280,12 +249,15 @@ class DatWorkerPool
         # this allows controlling how long a worker takes to finish processing
         # the work item
         def work!(work_item)
+          params[:working].add(self)
           params[:work_mutex].synchronize do
             params[:work_cond_var].wait(params[:work_mutex])
           end
           params[:finished].push(work_item)
+          params[:working].remove(self)
         end
       end
+      @working       = LockedSet.new
       @work_mutex    = Mutex.new
       @work_cond_var = ConditionVariable.new
       @finished      = LockedArray.new
@@ -295,6 +267,7 @@ class DatWorkerPool
         :num_workers   => @num_workers,
         :logger        => TEST_LOGGER,
         :worker_params => @worker_params.merge({
+          :working       => @working,
           :work_mutex    => @work_mutex,
           :work_cond_var => @work_cond_var,
           :finished      => @finished,
@@ -308,7 +281,7 @@ class DatWorkerPool
       # add 1 more work item than we have workers to handle it
       @work_items = (@num_workers + 1).times.map{ Factory.string }
       @work_items.each{ |wi| @worker_pool.add_work(wi) }
-      wait_for_workers_to_become_unavailable
+      wait_for_workers{ @working.size == @num_workers }
     end
     teardown do
       # ensure we wakeup any workers still stuck in their `work!`
@@ -356,12 +329,7 @@ class DatWorkerPool
       assert_true @finished.empty?
       assert_true @errored.empty?
 
-      # start the shutdown in a thread, this will hang until the timeout
-      # finishes; this is required otherwise system timer will think we are
-      # triggering a deadlock (it's not a deadlock because of the timeout)
-      shutdown_thread = Thread.new{ subject.shutdown(0) }
-      shutdown_thread.join(JOIN_SECONDS)
-      assert_false shutdown_thread.status
+      subject.shutdown(0)
 
       # wait for the workers to get forced to exit
       wait_for_workers{ @errored.size == @num_workers }
@@ -378,22 +346,8 @@ class DatWorkerPool
         assert_instance_of ShutdownError, exception
         assert_includes work_item, @work_items[0, @num_workers]
       end
-
-      # ensure the shutdown exits
-      shutdown_thread.join
-      assert_false shutdown_thread.alive?
     end
 
-  end
-
-  module SystemTestWorker
-    def self.included(klass)
-      klass.class_eval{ include DatWorkerPool::Worker }
-    end
-
-    def signal_test_suite_thread
-      params[:mutex].synchronize{ params[:cond_var].signal }
-    end
   end
 
 end
