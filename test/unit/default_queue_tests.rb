@@ -162,6 +162,7 @@ class DatWorkerPool::DefaultQueue
 
       value = Factory.string
       @queue.dwp_push(value)
+      subject.join(JOIN_SECONDS)
 
       assert_not subject.alive?
       assert_equal value, subject['popped_value']
@@ -176,6 +177,7 @@ class DatWorkerPool::DefaultQueue
       # sleeps and grabs the lock and work item before the thread being woken
       # up
       @work_items.with_lock{ @cond_var_spy.signal }
+      subject.join(JOIN_SECONDS)
 
       assert_equal 'sleep', subject.status
       assert_equal 2, @cond_var_spy.wait_call_count
@@ -186,6 +188,7 @@ class DatWorkerPool::DefaultQueue
       assert_equal 1, @cond_var_spy.wait_call_count
 
       @queue.dwp_shutdown
+      subject.join(JOIN_SECONDS)
 
       assert_not subject.alive?
       assert_equal 1, @cond_var_spy.wait_call_count
@@ -207,6 +210,7 @@ class DatWorkerPool::DefaultQueue
       # accesses the array directly and pushes an item on it
       @work_items.push(Factory.string)
       @queue.dwp_shutdown
+      subject.join(JOIN_SECONDS)
 
       assert_not subject.alive?
       assert_nil subject['popped_value']

@@ -3,10 +3,13 @@ require 'dat-worker-pool/runner'
 
 require 'much-timeout'
 require 'dat-worker-pool/default_queue'
+require 'test/support/signal_test_worker'
 
 class DatWorkerPool::Runner
 
   class UnitTests < Assert::Context
+    include SignalTestWorker::TestHelpers
+
     desc "DatWorkerPool::Runner"
     setup do
       @runner_class = DatWorkerPool::Runner
@@ -18,12 +21,13 @@ class DatWorkerPool::Runner
   class InitTests < UnitTests
     desc "when init"
     setup do
-      # at least 2 workers, up to 4
-      @num_workers   = Factory.integer(3) + 1
-      @logger        = TEST_LOGGER || Logger.new("/dev/null")
-      @queue         = DatWorkerPool::DefaultQueue.new
-      @worker_class  = TestWorker
-      @worker_params = { Factory.string => Factory.string }
+      @logger       = TEST_LOGGER || Logger.new("/dev/null")
+      @queue        = DatWorkerPool::DefaultQueue.new
+      @worker_class = TestWorker
+
+      @worker_params.merge!({
+        Factory.string => Factory.string
+      })
 
       @workers = DatWorkerPool::LockedArray.new
       Assert.stub(DatWorkerPool::LockedArray, :new){ @workers }
@@ -72,24 +76,6 @@ class DatWorkerPool::Runner
       assert_equal @workers.values, subject.workers
       @workers.push(Factory.string)
       assert_equal @workers.values, subject.workers
-    end
-
-    should "start its queue when its started" do
-      assert_false @queue.running?
-      subject.start
-      assert_true @queue.running?
-    end
-
-    should "build and add workers when its started" do
-      subject.start
-
-      assert_equal @num_workers, subject.workers.size
-      subject.workers.each_with_index do |worker, n|
-        assert_equal subject, worker.dwp_runner
-        assert_equal @queue,  worker.dwp_queue
-        assert_equal n + 1,   worker.dwp_number
-        assert_true worker.dwp_running?
-      end
     end
 
     should "allow making workers available/unavailable" do
@@ -143,12 +129,32 @@ class DatWorkerPool::Runner
 
   end
 
-  class ShutdownSetupTests < InitTests
-    desc "and started and shutdown"
+  class StartTests < InitTests
+    desc "and started"
+
+    should "start its queue" do
+      assert_false @queue.running?
+      subject.start
+      assert_true @queue.running?
+    end
+
+    should "build and add workers" do
+      subject.start
+      wait_for_workers_to_become_available
+
+      assert_equal @num_workers, subject.workers.size
+      subject.workers.each_with_index do |worker, n|
+        assert_equal subject, worker.dwp_runner
+        assert_equal @queue,  worker.dwp_queue
+        assert_equal n + 1,   worker.dwp_number
+        assert_true worker.dwp_running?
+      end
+    end
 
   end
 
-  class ShutdownTests < ShutdownSetupTests
+  class ShutdownTests < StartTests
+    desc "and shutdown"
     setup do
       @timeout_seconds         = nil
       @optional_timeout_called = false
@@ -159,9 +165,9 @@ class DatWorkerPool::Runner
         args[:do].call
       end
 
-      @options[:worker_class] = ShutdownSpyWorker
-      @runner = @runner_class.new(@options)
       @runner.start
+      wait_for_workers_to_become_available
+
       # we need a reference to the workers, the runners workers will get removed
       # as they shutdown
       @running_workers = @runner.workers.dup
@@ -183,7 +189,10 @@ class DatWorkerPool::Runner
       @running_workers.each do |worker|
         assert_false worker.dwp_shutdown?
       end
+
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
+      wait_for_workers_to_become_unavailable
+
       @running_workers.each do |worker|
         assert_true worker.dwp_shutdown?
       end
@@ -199,7 +208,10 @@ class DatWorkerPool::Runner
       @running_workers.each do |worker|
         assert_false worker.join_called
       end
+
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
+      wait_for_workers_to_become_unavailable
+
       @running_workers.each do |worker|
         assert_true worker.join_called
       end
@@ -207,7 +219,10 @@ class DatWorkerPool::Runner
 
     should "join all workers even if one raises an error when joined" do
       @running_workers.sample.join_error = Factory.exception
+
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
+      wait_for_workers_to_become_unavailable
+
       @running_workers.each do |worker|
         assert_true worker.join_called
       end
@@ -215,7 +230,10 @@ class DatWorkerPool::Runner
 
     should "remove workers as they finish" do
       assert_false subject.workers.empty?
+
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
+      wait_for_workers_to_become_unavailable
+
       assert_true subject.workers.empty?
     end
 
@@ -224,7 +242,10 @@ class DatWorkerPool::Runner
 
       assert_false subject.workers.empty?
       assert_false @available_workers_spy.empty?
+
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
+      wait_for_workers_to_become_unavailable
+
       assert_true subject.workers.empty?
       assert_true @available_workers_spy.empty?
     end
@@ -233,6 +254,9 @@ class DatWorkerPool::Runner
       Assert.stub(MuchTimeout, :just_optional_timeout) do |secs, args|
         args[:on_timeout].call # force an immediate timeout
       end
+
+      @num_workers.times{ @queue.dwp_push(:hang) }
+      wait_for_workers_to_become_unavailable
       subject.shutdown(Factory.integer)
 
       @running_workers.each do |worker|
@@ -246,6 +270,9 @@ class DatWorkerPool::Runner
     should "force its workers to shutdown if a non-timeout error occurs" do
       queue_exception = Factory.exception
       Assert.stub(@queue, :dwp_shutdown){ raise queue_exception }
+
+      @num_workers.times{ @queue.dwp_push(:hang) }
+      wait_for_workers_to_become_unavailable
 
       caught_exception = nil
       begin
@@ -266,14 +293,21 @@ class DatWorkerPool::Runner
       Assert.stub(MuchTimeout, :just_optional_timeout) do |secs, args|
         args[:on_timeout].call # force an immediate timeout
       end
-      error_class = Factory.boolean ? DatWorkerPool::ShutdownError : RuntimeError
-      @running_workers.sample.join_error = Factory.exception(error_class)
+      error_class  = Factory.boolean ? DatWorkerPool::ShutdownError : RuntimeError
+      error_worker = @running_workers.sample
+      error_worker.join_error = Factory.exception(error_class)
+
+      @num_workers.times{ @queue.dwp_push(:hang) }
+      wait_for_workers_to_become_unavailable
       subject.shutdown(Factory.boolean ? Factory.integer : nil)
 
-      @running_workers.each do |worker|
+      (@running_workers - [error_worker]).each do |worker|
         assert_instance_of DatWorkerPool::ShutdownError, worker.raised_error
         assert_true worker.join_called
       end
+      assert_instance_of error_class, error_worker.raised_error
+      assert_true error_worker.join_called
+
       assert_true subject.workers.empty?
       assert_true @available_workers_spy.empty?
     end
@@ -323,48 +357,46 @@ class DatWorkerPool::Runner
   end
 
   class TestWorker
-    include DatWorkerPool::Worker
+    include SignalTestWorker
 
-    # for testing what is passed to the worker
-    attr_reader :dwp_runner, :dwp_queue
-  end
-
-  FakeWorker = Struct.new(:dwp_number)
-
-  class ShutdownSpyWorker < TestWorker
     attr_reader :join_called
     attr_accessor :join_error, :raised_error
 
-    # this pauses the shutdown so we can test that join or raise are called
-    # depending if we are doing a standard or forced shutdown; otherwise the
-    # worker threads can exit before join or raise ever gets called on them and
-    # then there is nothing to test
-    on_shutdown{ wait_for_join_or_raise }
+    # for testing what is passed to the worker
+    attr_reader :dwp_runner, :dwp_queue
+
+    on_available{   signal_test_suite_thread }
+    on_unavailable{ signal_test_suite_thread }
+
+    on_shutdown{ raise self.join_error if self.join_error }
+
+    on_error{ |e, wi| self.raised_error = e }
 
     def initialize(*args)
       super
-      @mutex        = Mutex.new
-      @cond_var     = ConditionVariable.new
-      @join_called  = false
-      @join_error   = nil
-      @raised_error = nil
+      @join_called = false
+      @join_error  = nil
+
+      @hang_mutex    = Mutex.new
+      @hang_cond_var = ConditionVariable.new
+    end
+
+    def work!(work_item)
+      case(work_item)
+      when :hang
+        MuchTimeout.timeout(1) do
+          @hang_mutex.synchronize{ @hang_cond_var.wait(@hang_mutex) }
+        end
+      end
     end
 
     def dwp_join(*args)
       @join_called = true
-      raise @join_error if @join_error
-      @mutex.synchronize{ @cond_var.broadcast }
+      super
     end
 
-    def dwp_raise(error)
-      @raised_error = error
-    end
-
-    private
-
-    def wait_for_join_or_raise
-      @mutex.synchronize{ @cond_var.wait(@mutex) }
-    end
   end
+
+  FakeWorker = Struct.new(:dwp_number)
 
 end

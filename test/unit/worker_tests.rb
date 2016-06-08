@@ -1,6 +1,7 @@
 require 'assert'
 require 'dat-worker-pool/worker'
 
+require 'much-timeout'
 require 'dat-worker-pool/default_queue'
 require 'dat-worker-pool/runner'
 require 'test/support/thread_spies'
@@ -124,9 +125,18 @@ module DatWorkerPool::Worker
       })
       @number = Factory.integer(10)
 
-      @thread_spy = ThreadSpy.new
+      # we only want to stub the first `Thread.new` call, not all calls;
+      # stubbing all threads can generate unexpected behavior and specifically
+      # causes `MuchTimeout` to not work correctly
+      @worker_thread_built = false
+      @thread_spy          = ThreadSpy.new
       Assert.stub(Thread, :new) do |&block|
-        @thread_spy.tap{ |s| s.block = block }
+        if !@worker_thread_built
+          @worker_thread_built = true
+          @thread_spy.tap{ |s| s.block = block }
+        else
+          Assert.stub_send(Thread, :new, &block)
+        end
       end
 
       @available_worker = nil
@@ -548,12 +558,9 @@ module DatWorkerPool::Worker
       error_method
     end
 
-    # this could loop forever so ensure it doesn't by using a timeout; use
-    # timeout instead of system timer because system timer is paranoid about a
-    # deadlock even though its intended to prevent the deadlock because it times
-    # out the block
+    # this could loop forever so ensure it doesn't by using a timeout
     def wait_for_worker(&block)
-      Timeout.timeout(1) do
+      MuchTimeout.timeout(1) do
         @mutex.synchronize{ @cond_var.wait(@mutex) } while !block.call
       end
     end
@@ -586,7 +593,7 @@ module DatWorkerPool::Worker
 
     def wait_for_worker_thread_to_stop
       return unless @worker.dwp_thread_alive?
-      Timeout.timeout(1){ @worker.dwp_join }
+      MuchTimeout.timeout(1){ @worker.dwp_join }
     end
 
     # this is needed because errors will be re-raised when the thread is joined
