@@ -143,7 +143,9 @@ class DatWorkerPool
         def work!(work_item)
           params[:finished].push(work_item)
           signal_test_suite_thread
-          raise if work_item == 'error'
+          if work_item == 'error'
+            raise Factory.exception(STANDARD_ERROR_CLASSES.sample)
+          end
         end
       end
       # use one worker to simplify; we only need to see that one worker runs its

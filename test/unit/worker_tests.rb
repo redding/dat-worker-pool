@@ -30,6 +30,11 @@ module DatWorkerPool::Worker
     should have_imeths :prepend_on_error
     should have_imeths :prepend_before_work, :prepend_after_work
 
+    should "know its standard error classes" do
+      exp = [StandardError, Timeout::Error]
+      assert_equal exp, DatWorkerPool::Worker::STANDARD_ERROR_CLASSES
+    end
+
     should "not have any callbacks by default" do
       assert_equal [], subject.on_start_callbacks
       assert_equal [], subject.on_shutdown_callbacks
@@ -255,7 +260,7 @@ module DatWorkerPool::Worker
     should "make itself available/unavailable and run callbacks if it errors" do
       # these are the only errors that could interfere with it
       error_method = [:on_unavailable_error, :work_error].sample
-      exception = Factory.exception
+      exception = Factory.exception(STANDARD_ERROR_CLASSES.sample)
       subject.send("#{error_method}=", exception)
 
       subject.dwp_start
@@ -303,7 +308,7 @@ module DatWorkerPool::Worker
     end
 
     should "run its on-error callbacks if it errors while starting" do
-      exception = Factory.exception
+      exception = Factory.exception(STANDARD_ERROR_CLASSES.sample)
       error_method = [:on_start_error, :on_available_error].sample
       subject.send("#{error_method}=", exception)
 
@@ -315,7 +320,7 @@ module DatWorkerPool::Worker
     end
 
     should "stop its thread if it errors while starting" do
-      exception = Factory.exception
+      exception = Factory.exception(STANDARD_ERROR_CLASSES.sample)
       error_method = [:on_start_error, :on_available_error].sample
       subject.send("#{error_method}=", exception)
 
@@ -327,7 +332,7 @@ module DatWorkerPool::Worker
     end
 
     should "run its on-error callbacks if it errors while shutting down" do
-      exception = Factory.exception
+      exception = Factory.exception(STANDARD_ERROR_CLASSES.sample)
       error_method = [:on_shutdown_error, :on_unavailable_error].sample
       subject.send("#{error_method}=", exception)
 
@@ -343,7 +348,7 @@ module DatWorkerPool::Worker
       subject.dwp_start
       wait_for_worker_to_be_available
 
-      exception = Factory.exception
+      exception = Factory.exception(STANDARD_ERROR_CLASSES.sample)
       setup_work_loop_to_raise_exception(exception)
 
       @queue.dwp_push(Factory.string)
@@ -353,7 +358,7 @@ module DatWorkerPool::Worker
     end
 
     should "run its on-error callbacks if an error occurs while running" do
-      exception = Factory.exception
+      exception = Factory.exception(STANDARD_ERROR_CLASSES.sample)
       subject.dwp_start
       wait_for_worker_to_be_available
 
@@ -367,7 +372,7 @@ module DatWorkerPool::Worker
     end
 
     should "not stop its thread if an error occurs in an on-error callback" do
-      exception = Factory.exception
+      exception = Factory.exception(STANDARD_ERROR_CLASSES.sample)
       subject.dwp_start
       wait_for_worker_to_be_available
 

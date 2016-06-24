@@ -1,9 +1,17 @@
 require 'thread'
+require 'timeout'
 require 'dat-worker-pool/runner'
 
 class DatWorkerPool
 
   module Worker
+
+    # these are standard error classes that we rescue, handle and don't reraise
+    # in the work loop, this keeps the worker thread from shutting down
+    # unexpectedly; `Timeout::Error` is a common non `StandardError` exception
+    # that should be treated like a `StandardError`, we don't want an uncaught
+    # `Timeout::Error` to shutdown a worker thread
+    STANDARD_ERROR_CLASSES = [StandardError, Timeout::Error].freeze
 
     def self.included(klass)
       klass.class_eval do
@@ -109,13 +117,13 @@ class DatWorkerPool
               rescue ShutdownError => exception
                 dwp_handle_exception(exception, work_item)
                 Thread.current.raise exception
-              rescue StandardError => exception
+              rescue *STANDARD_ERROR_CLASSES => exception
                 dwp_handle_exception(exception, work_item)
               ensure
                 dwp_make_available
               end
             end
-          rescue StandardError => exception
+          rescue *STANDARD_ERROR_CLASSES => exception
             dwp_handle_exception(exception, work_item)
           end
         end
@@ -128,7 +136,7 @@ class DatWorkerPool
         begin
           dwp_run_callback 'on_start'
           dwp_make_available
-        rescue StandardError => exception
+        rescue *STANDARD_ERROR_CLASSES => exception
           dwp_handle_exception(exception)
           Thread.current.raise exception
         end
@@ -160,7 +168,7 @@ class DatWorkerPool
         begin
           dwp_make_unavailable
           dwp_run_callback 'on_shutdown'
-        rescue StandardError => exception
+        rescue *STANDARD_ERROR_CLASSES => exception
           dwp_handle_exception(exception)
         end
         dwp_log{ "Shutdown" }
@@ -172,7 +180,7 @@ class DatWorkerPool
         begin
           dwp_log_exception(exception)
           dwp_run_callback('on_error', exception, work_item)
-        rescue StandardError => on_error_exception
+        rescue *STANDARD_ERROR_CLASSES => on_error_exception
           # errors while running on-error callbacks are logged but otherwise
           # ignored to keep the worker from crashing, ideally these should be
           # caught by the on-error callbacks themselves and never get here
