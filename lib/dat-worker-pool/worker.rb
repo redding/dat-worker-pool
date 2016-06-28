@@ -8,10 +8,15 @@ class DatWorkerPool
 
     # these are standard error classes that we rescue, handle and don't reraise
     # in the work loop, this keeps the worker thread from shutting down
-    # unexpectedly; `Timeout::Error` is a common non `StandardError` exception
-    # that should be treated like a `StandardError`, we don't want an uncaught
-    # `Timeout::Error` to shutdown a worker thread
-    STANDARD_ERROR_CLASSES = [StandardError, Timeout::Error].freeze
+    # unexpectedly; `LoadError`, `NotImplementedError` and `Timeout::Error` are
+    # common non `StandardError` exception that should be treated like a
+    # `StandardError`, we don't want one of these to shutdown a worker thread
+    STANDARD_ERROR_CLASSES = [
+      StandardError,
+      LoadError,
+      NotImplementedError,
+      Timeout::Error
+    ].freeze
 
     def self.included(klass)
       klass.class_eval do

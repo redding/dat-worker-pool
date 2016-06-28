@@ -31,7 +31,7 @@ module DatWorkerPool::Worker
     should have_imeths :prepend_before_work, :prepend_after_work
 
     should "know its standard error classes" do
-      exp = [StandardError, Timeout::Error]
+      exp = [StandardError, LoadError, NotImplementedError, Timeout::Error]
       assert_equal exp, DatWorkerPool::Worker::STANDARD_ERROR_CLASSES
     end
 
